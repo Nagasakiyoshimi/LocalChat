@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' file: data:; connect-src 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LocalChat</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <header class="sidebar-header drag">
+          <button id="me" class="me no-drag" title="Change your display name"></button>
+        </header>
+
+        <nav class="sidebar-scroll">
+          <section>
+            <h2>
+              Rooms
+              <button id="new-room" class="icon-button" title="Create room" aria-label="Create room"></button>
+            </h2>
+            <ul id="room-list" class="list"></ul>
+          </section>
+
+          <section id="discover-section" hidden>
+            <h2>Rooms nearby</h2>
+            <ul id="discover-list" class="list"></ul>
+          </section>
+
+          <section id="dm-section" hidden>
+            <h2>Direct messages</h2>
+            <ul id="dm-list" class="list"></ul>
+          </section>
+
+          <section>
+            <h2>Nearby devices <span id="peer-count" class="count"></span></h2>
+            <ul id="peer-list" class="list"></ul>
+          </section>
+        </nav>
+
+        <footer class="sidebar-footer">
+          <button id="open-downloads" class="link-button">Open received files</button>
+        </footer>
+      </aside>
+
+      <main id="chat" class="chat">
+        <header class="chat-header drag">
+          <div class="chat-title">
+            <h1 id="room-title"></h1>
+            <p id="room-subtitle"></p>
+          </div>
+          <button id="leave-room" class="ghost-button no-drag"></button>
+        </header>
+
+        <div id="messages" class="messages" role="log" aria-live="polite"></div>
+
+        <form id="composer" class="composer">
+          <button type="button" id="attach" class="icon-button" title="Send files" aria-label="Send files"></button>
+          <textarea id="input" rows="1" placeholder="Message" autocomplete="off"></textarea>
+          <button type="submit" id="send" class="send-button" title="Send" aria-label="Send"></button>
+        </form>
+
+        <div id="drop-overlay" class="drop-overlay" hidden>
+          <div>Drop files to send</div>
+        </div>
+      </main>
+    </div>
+
+    <dialog id="prompt-dialog">
+      <form method="dialog">
+        <h3 id="prompt-title"></h3>
+        <input id="prompt-input" maxlength="40" required />
+        <menu>
+          <button value="cancel" formnovalidate class="ghost-button">Cancel</button>
+          <button value="ok" class="primary-button" id="prompt-ok">OK</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast" hidden></div>
+  </body>
+</html>
