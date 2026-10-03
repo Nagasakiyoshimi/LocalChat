@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  desktop:
     strategy:
       fail-fast: false
       matrix:
@@ -44,3 +44,38 @@ jobs:
           files: |
             dist/*.exe
             dist/*.dmg
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Build release APK
+        working-directory: android
+        run: chmod +x gradlew && ./gradlew assembleRelease --no-daemon
+
+      - name: Rename APK
+        run: |
+          mkdir -p dist-android
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then VERSION="android"; fi
+          cp android/app/build/outputs/apk/release/app-release.apk \
+            "dist-android/LocalChat-${VERSION}.apk"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: LocalChat-android
+          path: dist-android/*.apk
+
+      - name: Attach to GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-android/*.apk
