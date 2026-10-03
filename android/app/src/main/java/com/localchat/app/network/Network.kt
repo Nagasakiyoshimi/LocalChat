@@ -392,12 +392,14 @@ class Network(
         socket.use { sock ->
             val input = BufferedInputStream(sock.getInputStream())
             val output = BufferedOutputStream(sock.getOutputStream())
+            var method = "?"
+            var path = "?"
             try {
                 val requestLine = readLine(input) ?: return
                 val parts = requestLine.split(' ')
                 if (parts.size < 2) return
-                val method = parts[0]
-                val path = parts[1].substringBefore('?')
+                method = parts[0]
+                path = parts[1].substringBefore('?')
                 val headers = mutableMapOf<String, String>()
                 while (true) {
                     val line = readLine(input) ?: break

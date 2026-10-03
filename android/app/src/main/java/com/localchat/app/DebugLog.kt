@@ -26,7 +26,7 @@ object DebugLog {
         val existing = runCatching { logFile.readText() }.getOrDefault("")
         if (existing.isNotBlank()) {
             synchronized(lines) {
-                existing.lineSequence().filter { it.isNotBlank() }.takeLast(MAX_LINES).forEach { lines.addLast(it) }
+                existing.lines().filter { it.isNotBlank() }.takeLast(MAX_LINES).forEach { lines.addLast(it) }
                 _text.value = lines.joinToString("\n")
             }
         }
