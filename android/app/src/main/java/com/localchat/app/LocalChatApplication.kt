@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
 import com.localchat.app.network.ChatEngine
+import java.io.File
 
 class LocalChatApplication : Application() {
     lateinit var chat: ChatEngine
@@ -20,6 +21,13 @@ class LocalChatApplication : Application() {
             )
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
+        DebugLog.attach(File(filesDir, "debug.log"))
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            DebugLog.log("crash on ${thread.name}", error)
+            previous?.uncaughtException(thread, error)
+        }
+        DebugLog.log("LocalChat ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) Android ${Build.VERSION.RELEASE} ${Build.MANUFACTURER} ${Build.MODEL}")
         chat = ChatEngine(this)
     }
 

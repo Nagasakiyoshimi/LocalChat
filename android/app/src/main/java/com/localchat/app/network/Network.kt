@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.util.Log
+import com.localchat.app.DebugLog
 import com.localchat.app.data.Peer
 import com.localchat.app.data.PeerRoom
 import com.localchat.app.data.Person
@@ -93,27 +94,37 @@ class Network(
 
     fun start() {
         if (!running.compareAndSet(false, true)) return
-        downloadDir.mkdirs()
-        acquireMulticastLock()
+        try {
+            downloadDir.mkdirs()
+            acquireMulticastLock()
 
-        val ss = ServerSocket(0)
-        serverSocket = ss
-        httpPort = ss.localPort
-        acceptExecutor.execute { acceptLoop(ss) }
+            val ss = ServerSocket(0)
+            serverSocket = ss
+            httpPort = ss.localPort
+            acceptExecutor.execute { acceptLoop(ss) }
 
-        val ms = MulticastSocket(null).apply {
-            reuseAddress = true
-            bind(InetSocketAddress(DISCOVERY_PORT))
-            broadcast = true
-            timeToLive = 1
-            loopbackMode = false
+            val ms = MulticastSocket(null).apply {
+                reuseAddress = true
+                bind(InetSocketAddress(DISCOVERY_PORT))
+                broadcast = true
+                timeToLive = 1
+                loopbackMode = false
+            }
+            socket = ms
+            joinMulticast()
+            receiveExecutor.execute { receiveLoop(ms) }
+            scheduler.scheduleAtFixedRate({
+                runCatching { announce() }.onFailure { DebugLog.log("announce failed", it) }
+            }, 0, ANNOUNCE_INTERVAL_MS, TimeUnit.MILLISECONDS)
+            scheduler.scheduleAtFixedRate({ sweep() }, SWEEP_INTERVAL_MS, SWEEP_INTERVAL_MS, TimeUnit.MILLISECONDS)
+            announce()
+            DebugLog.log("network up  http=:$httpPort  udp=$DISCOVERY_PORT  multicastLock=${multicastLock?.isHeld == true}")
+            DebugLog.log("interfaces ${describeInterfaces()}")
+        } catch (e: Exception) {
+            running.set(false)
+            DebugLog.log("network start failed", e)
+            throw e
         }
-        socket = ms
-        joinMulticast()
-        receiveExecutor.execute { receiveLoop(ms) }
-        scheduler.scheduleAtFixedRate({ runCatching { announce() } }, 0, ANNOUNCE_INTERVAL_MS, TimeUnit.MILLISECONDS)
-        scheduler.scheduleAtFixedRate({ sweep() }, SWEEP_INTERVAL_MS, SWEEP_INTERVAL_MS, TimeUnit.MILLISECONDS)
-        announce()
     }
 
     fun stop() {
@@ -151,11 +162,18 @@ class Network(
     }
 
     fun sendMessage(peer: Peer, envelope: JSONObject) {
-        val body = envelope.toString().toRequestBody("application/json".toMediaType())
-        val req = Request.Builder().url("http://${peer.address}:${peer.port}/api/message").post(body).build()
-        http.newCall(req).execute().use { res ->
-            res.body?.string()
-            if (!res.isSuccessful) error("Peer responded with ${res.code}")
+        val url = "http://${peer.address}:${peer.port}/api/message"
+        try {
+            val body = envelope.toString().toRequestBody("application/json".toMediaType())
+            val req = Request.Builder().url(url).post(body).build()
+            http.newCall(req).execute().use { res ->
+                val response = res.body?.string()
+                if (!res.isSuccessful) error("Peer responded with ${res.code} ${response.orEmpty()}")
+            }
+            DebugLog.log("sent message to ${peer.name} $url")
+        } catch (e: Exception) {
+            DebugLog.log("send message failed $url", e)
+            throw e
         }
     }
 
@@ -174,9 +192,15 @@ class Network(
             .header("x-localchat-meta", java.net.URLEncoder.encode(meta.toString(), Charsets.UTF_8.name()))
             .post(body)
             .build()
-        http.newCall(req).execute().use { res ->
-            res.body?.string()
-            if (!res.isSuccessful) error("Peer responded with ${res.code}")
+        try {
+            http.newCall(req).execute().use { res ->
+                val response = res.body?.string()
+                if (!res.isSuccessful) error("Peer responded with ${res.code} ${response.orEmpty()}")
+            }
+            DebugLog.log("sent file ${file.name} ($size bytes) to ${peer.name} ${peer.address}:${peer.port}")
+        } catch (e: Exception) {
+            DebugLog.log("send file failed ${peer.address}:${peer.port} ${file.name}", e)
+            throw e
         }
     }
 
@@ -206,9 +230,11 @@ class Network(
             if (!joined.add(key)) continue
             runCatching {
                 ms.joinGroup(InetSocketAddress(group, DISCOVERY_PORT), ni)
+            }.onSuccess {
+                DebugLog.log("joined multicast on $key")
             }.onFailure {
                 joined.remove(key)
-                Log.w(TAG, "multicast join failed on $key: ${it.message}")
+                DebugLog.log("multicast join failed on $key", it)
             }
         }
     }
@@ -248,8 +274,25 @@ class Network(
         }
         for (addr in targets) {
             runCatching { ms.send(DatagramPacket(data, data.size, addr, DISCOVERY_PORT)) }
+                .onFailure { DebugLog.log("udp send to ${addr.hostAddress} failed", it) }
+        }
+        if (target == null && !loggedBroadcast) {
+            loggedBroadcast = true
+            DebugLog.log("announcing to ${targets.joinToString { it.hostAddress ?: "?" }}")
         }
     }
+
+    private var loggedBroadcast = false
+
+    private fun describeInterfaces(): String =
+        localIpv4Interfaces().joinToString("; ") { ni ->
+            val ips = ni.interfaceAddresses
+                .mapNotNull { it.address }
+                .filterIsInstance<Inet4Address>()
+                .filter { !it.isLoopbackAddress }
+                .joinToString(",") { it.hostAddress ?: "?" }
+            "${ni.name}=$ips"
+        }.ifBlank { "(none)" }
 
     private fun receiveLoop(ms: MulticastSocket) {
         val buf = ByteArray(64 * 1024)
@@ -262,7 +305,7 @@ class Network(
             } catch (_: SocketException) {
                 if (!running.get()) break
             } catch (e: Exception) {
-                Log.w(TAG, "receive: ${e.message}")
+                DebugLog.log("udp receive failed", e)
             }
         }
     }
@@ -274,7 +317,11 @@ class Network(
         if (id.isBlank() || id.length > 100 || id == selfProvider().id) return
 
         if (packet.optString("type") == "bye") {
-            if (peers.remove(id) != null) onPeersChanged()
+            val removed = peers.remove(id)
+            if (removed != null) {
+                DebugLog.log("peer left ${removed.name} ($id)")
+                onPeersChanged()
+            }
             return
         }
         if (packet.optString("type") != "announce") return
@@ -295,7 +342,10 @@ class Network(
         val device = packet.optString("device").take(100)
         val prev = peers[id]
         peers[id] = Peer(id, name, device, address, port, rooms, System.currentTimeMillis())
-        if (prev == null) announce(address)
+        if (prev == null) {
+            DebugLog.log("peer found $name at $address:$port device=$device rooms=${rooms.size}")
+            announce(address)
+        }
         val changed = prev == null ||
             prev.name != name ||
             prev.address != address ||
@@ -332,7 +382,7 @@ class Network(
             } catch (_: SocketException) {
                 if (!running.get()) break
             } catch (e: Exception) {
-                Log.w(TAG, "accept: ${e.message}")
+                DebugLog.log("http accept failed", e)
             }
         }
     }
@@ -375,6 +425,7 @@ class Network(
                         val body = readExact(input, length)
                         val envelope = parseEnvelope(JSONObject(String(body, Charsets.UTF_8)))
                         touch(envelope.from.id, remote)
+                        DebugLog.log("got message from ${envelope.from.name} room=${envelope.roomType}:${envelope.roomId}")
                         onMessage(envelope)
                         writeJson(output, 200, JSONObject().put("ok", true))
                     }
@@ -388,6 +439,7 @@ class Network(
                         require(size >= 0)
                         touch(envelope.from.id, remote)
                         val saved = receiveFile(input, fileName, size)
+                        DebugLog.log("got file ${saved.name} ($size bytes) from ${envelope.from.name}")
                         onMessage(
                             envelope.copy(
                                 text = "",
@@ -401,7 +453,7 @@ class Network(
                     else -> writeJson(output, 404, JSONObject().put("error", "Not found"))
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "http: ${e.message}")
+                DebugLog.log("http $method $path failed", e)
                 runCatching { writeJson(output, 400, JSONObject().put("error", e.message ?: "error")) }
             }
         }

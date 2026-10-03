@@ -1,6 +1,7 @@
 package com.localchat.app.network
 
 import android.content.Context
+import com.localchat.app.DebugLog
 import com.localchat.app.data.AppState
 import com.localchat.app.data.ChatMessage
 import com.localchat.app.data.DiscoverRoom
@@ -49,7 +50,7 @@ class ChatEngine(context: Context) {
         network = net
         Thread {
             runCatching { net.start() }
-                .onFailure { android.util.Log.e("LocalChat", "network start failed", it) }
+                .onFailure { DebugLog.log("network start failed", it) }
         }.start()
         publish()
     }
@@ -143,8 +144,13 @@ class ChatEngine(context: Context) {
                     .put("name", if (room.type == "group") room.name else ""),
             )
         val delivered = withContext(Dispatchers.IO) {
-            targets.count { peer -> runCatching { send(peer, envelope) }.isSuccess }
+            targets.count { peer ->
+                runCatching { send(peer, envelope) }
+                    .onFailure { DebugLog.log("delivery to ${peer.name} failed", it) }
+                    .isSuccess
+            }
         }
+        DebugLog.log("delivery ${record.text.take(40).ifBlank { record.file?.name ?: record.id }} -> $delivered/${targets.size}")
         updateMessage(
             record.copy(
                 recipients = targets.size,

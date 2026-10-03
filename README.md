@@ -10,7 +10,7 @@ Download the latest build from the [Releases](../../releases) page:
 
 - **Windows:** `LocalChat-Setup-x.y.z.exe`. Windows SmartScreen may warn because the app is unsigned — click **More info → Run anyway**. Allow LocalChat through Windows Firewall on **Private networks** when prompted.
 - **macOS:** `LocalChat-x.y.z.dmg`. The app is unsigned — right-click the app and choose **Open** the first time.
-- **Android:** `LocalChat-v*.apk`. Open the file on your phone and allow installing from that source if asked. Grant notifications and local network / Wi‑Fi related prompts so devices can find each other.
+- **Android:** `LocalChat-x.y.z.apk`. Open the file on your phone and allow installing from that source if asked. Grant notifications when asked. If something fails, open **Debug log** at the bottom of the home screen and tap **Share**.
 
 All devices must be on the same Wi‑Fi/LAN. Discovery uses UDP port 53318.
 

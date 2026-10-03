@@ -2,6 +2,9 @@ package com.localchat.app.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -62,11 +65,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.localchat.app.DebugLog
 import com.localchat.app.data.AppState
 import com.localchat.app.data.ChatMessage
 import com.localchat.app.data.Room
@@ -81,6 +86,7 @@ fun LocalChatApp(
     onRoomVisible: (String) -> Unit,
     onPickFiles: (String) -> Unit,
     onOpenFile: (String) -> Unit,
+    onShareLog: (String) -> Unit,
 ) {
     val state by chat.state.collectAsState()
     var currentRoomId by remember { mutableStateOf("lobby") }
@@ -88,6 +94,7 @@ fun LocalChatApp(
     val unread = remember { mutableStateMapOf<String, Int>() }
     var error by remember { mutableStateOf<String?>(null) }
     var prompt by remember { mutableStateOf<PromptKind?>(null) }
+    var showDebug by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(currentRoomId) {
@@ -99,7 +106,10 @@ fun LocalChatApp(
 
     fun run(block: suspend () -> Unit) {
         scope.launch {
-            runCatching { block() }.onFailure { error = it.message }
+            runCatching { block() }.onFailure {
+                DebugLog.log(it.message ?: "action failed", it)
+                error = it.message
+            }
         }
     }
 
@@ -140,7 +150,12 @@ fun LocalChatApp(
         null -> Unit
     }
 
-    if (showChat && room != null) {
+    if (showDebug) {
+        DebugScreen(
+            onBack = { showDebug = false },
+            onShare = { onShareLog(DebugLog.dump()) },
+        )
+    } else if (showChat && room != null) {
         ChatScreen(
             state = state,
             room = room,
@@ -182,6 +197,7 @@ fun LocalChatApp(
                     showChat = true
                 }
             },
+            onOpenDebug = { showDebug = true },
         )
     }
 
@@ -253,6 +269,7 @@ private fun HomeScreen(
     onSelectRoom: (String) -> Unit,
     onJoinRoom: (String) -> Unit,
     onOpenDirect: (String) -> Unit,
+    onOpenDebug: () -> Unit,
 ) {
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surfaceVariant) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
@@ -347,6 +364,52 @@ private fun HomeScreen(
                     }
                 }
             }
+
+            TextButton(
+                onClick = onOpenDebug,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            ) {
+                Text("Debug log")
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DebugScreen(onBack: () -> Unit, onShare: () -> Unit) {
+    val text by DebugLog.text.collectAsState()
+    val scroll = rememberScrollState()
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Debug log") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    TextButton(onClick = { DebugLog.clear() }) { Text("Clear") }
+                    TextButton(onClick = onShare) { Text("Share") }
+                },
+            )
+        },
+    ) { padding ->
+        SelectionContainer(
+            Modifier
+                .padding(padding)
+                .fillMaxSize(),
+        ) {
+            Text(
+                text.ifBlank { "No events yet. Leave this screen, use the app, then come back." },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(scroll)
+                    .padding(12.dp),
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+            )
         }
     }
 }

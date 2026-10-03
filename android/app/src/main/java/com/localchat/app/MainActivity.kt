@@ -39,8 +39,12 @@ class MainActivity : ComponentActivity() {
         if (uris.isEmpty()) return@registerForActivityResult
         lifecycleScope.launch {
             uris.forEach { uri ->
-                val file = withContext(Dispatchers.IO) { copyUriToCache(uri) } ?: return@forEach
+                val file = withContext(Dispatchers.IO) { copyUriToCache(uri) } ?: run {
+                    DebugLog.log("could not read picked file $uri")
+                    return@forEach
+                }
                 runCatching { app.chat.sendFile(roomId, file) }
+                    .onFailure { DebugLog.log("send file failed", it) }
             }
         }
     }
@@ -64,6 +68,7 @@ class MainActivity : ComponentActivity() {
                         filePicker.launch("*/*")
                     },
                     onOpenFile = { path -> openFile(path) },
+                    onShareLog = { text -> shareLog(text) },
                 )
             }
         }
@@ -121,6 +126,21 @@ class MainActivity : ComponentActivity() {
         } catch (_: Exception) {
             null
         }
+    }
+
+    private fun shareLog(text: String) {
+        val file = File(cacheDir, "localchat-log.txt")
+        file.writeText(text.ifBlank { "(empty log)" })
+        val uri = FileProvider.getUriForFile(this, "$packageName.files", file)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "LocalChat debug log")
+            putExtra(Intent.EXTRA_TEXT, text.take(80_000))
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        runCatching { startActivity(Intent.createChooser(intent, "Share debug log")) }
+            .onFailure { DebugLog.log("share log failed", it) }
     }
 
     private fun openFile(path: String) {
