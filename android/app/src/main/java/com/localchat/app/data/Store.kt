@@ -3,6 +3,9 @@ package com.localchat.app.data
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.UUID
 
 class Store(private val file: File, defaultName: String) {
@@ -11,7 +14,7 @@ class Store(private val file: File, defaultName: String) {
     var messages: MutableMap<String, MutableList<ChatMessage>>
 
     init {
-        val loaded = runCatching { JSONObject(file.readText()) }.getOrNull()
+        val loaded = newestStoreFile(file)?.let { runCatching { JSONObject(it.readText()) }.getOrNull() }
         me = if (loaded?.has("me") == true) {
             val m = loaded.getJSONObject("me")
             Me(m.getString("id"), m.getString("name"))
@@ -59,7 +62,20 @@ class Store(private val file: File, defaultName: String) {
             .put("messages", messagesObj)
         val tmp = File(file.parentFile, "${file.name}.tmp")
         tmp.writeText(root.toString())
-        tmp.renameTo(file)
+        // Android's File.renameTo will not replace a file that already exists, so a
+        // second save used to be dropped and only the first messages survived a restart.
+        val from = tmp.toPath()
+        val to = file.toPath()
+        try {
+            Files.move(from, to, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(from, to, StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
+
+    private fun newestStoreFile(target: File): File? {
+        val tmp = File(target.parentFile, "${target.name}.tmp")
+        return listOf(target, tmp).filter { it.exists() && it.length() > 0 }.maxByOrNull { it.lastModified() }
     }
 
     companion object {

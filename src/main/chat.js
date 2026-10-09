@@ -111,8 +111,9 @@ export class Chat extends EventEmitter {
 
   leaveRoom(roomId) {
     if (roomId === LOBBY.id) throw new Error('You cannot leave the Everyone room');
+    const room = this.#findRoom(roomId);
     this.#data.rooms = this.#data.rooms.filter((r) => r.id !== roomId);
-    delete this.#data.messages[roomId];
+    if (room?.type === 'dm') delete this.#data.messages[roomId];
     this.#changed({ rooms: true, peers: true });
   }
 

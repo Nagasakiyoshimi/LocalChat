@@ -395,7 +395,7 @@ function wireEvents() {
     const question =
       room.type === 'dm'
         ? `Delete your chat history with ${roomName(room)}?`
-        : `Leave #${room.name}? Your history for this room will be deleted.`;
+        : `Leave #${room.name}? Your messages stay on this device if you join the room again.`;
     if (confirm(question)) run(api.leaveRoom(room.id));
   });
 

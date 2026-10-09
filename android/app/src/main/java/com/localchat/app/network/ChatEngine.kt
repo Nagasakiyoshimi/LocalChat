@@ -85,8 +85,9 @@ class ChatEngine(context: Context) {
 
     fun leaveRoom(roomId: String) {
         if (roomId == Store.LOBBY.id) error("You cannot leave the Everyone room")
+        val room = store.rooms.find { it.id == roomId }
         store.rooms.removeAll { it.id == roomId }
-        store.messages.remove(roomId)
+        if (room?.type == "dm") store.messages.remove(roomId)
         changed(announce = true)
     }
 
