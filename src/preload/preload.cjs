@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('localchat', {
   openDownloads: () => ipcRenderer.invoke('file:open-downloads'),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   setBadge: (count) => ipcRenderer.invoke('app:set-badge', count),
+  checkUpdate: () => ipcRenderer.invoke('app:check-update'),
+  installUpdate: () => ipcRenderer.invoke('app:install-update'),
 
   onMe: subscribe('chat:me'),
   onRooms: subscribe('chat:rooms'),
@@ -33,4 +35,5 @@ contextBridge.exposeInMainWorld('localchat', {
   onMessage: subscribe('chat:message'),
   onMessageUpdate: subscribe('chat:message-update'),
   onFocusRoom: subscribe('chat:focus-room'),
+  onUpdate: subscribe('app:update'),
 });

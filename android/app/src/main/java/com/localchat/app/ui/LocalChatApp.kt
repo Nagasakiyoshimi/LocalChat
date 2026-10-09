@@ -89,6 +89,9 @@ fun LocalChatApp(
     onPickFiles: (String) -> Unit,
     onOpenFile: (String) -> Unit,
     onShareLog: (String) -> Unit,
+    updateVersion: String? = null,
+    updateBusy: Boolean = false,
+    onInstallUpdate: () -> Unit = {},
 ) {
     val state by chat.state.collectAsState()
     var currentRoomId by remember { mutableStateOf("lobby") }
@@ -166,6 +169,22 @@ fun LocalChatApp(
         null -> Unit
     }
 
+    Column(Modifier.fillMaxSize()) {
+    if (updateVersion != null) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Version $updateVersion is available", Modifier.weight(1f))
+            TextButton(onClick = onInstallUpdate, enabled = !updateBusy) {
+                Text(if (updateBusy) "Downloading…" else "Update")
+            }
+        }
+    }
+    Box(Modifier.weight(1f).fillMaxWidth()) {
     if (showDebug) {
         DebugScreen(
             onBack = { showDebug = false },
@@ -216,6 +235,8 @@ fun LocalChatApp(
             },
             onOpenDebug = { showDebug = true },
         )
+    }
+    }
     }
 
     // Update unread badges when messages change

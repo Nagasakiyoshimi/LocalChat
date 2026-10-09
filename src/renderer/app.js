@@ -434,6 +434,22 @@ function wireEvents() {
   });
 
   $('#open-downloads').addEventListener('click', () => run(api.openDownloads()));
+  $('#check-update').addEventListener('click', async () => {
+    const button = $('#check-update');
+    button.disabled = true;
+    const update = await api.checkUpdate().catch((err) => {
+      toast(err.message);
+      return null;
+    });
+    button.disabled = false;
+    if (!update) toast('You’re up to date');
+  });
+  $('#update-button').addEventListener('click', () => {
+    const button = $('#update-button');
+    button.disabled = true;
+    button.textContent = 'Downloading…';
+    run(api.installUpdate());
+  });
   $('#attach').addEventListener('click', () => run(api.pickFiles(state.current)));
 
   const input = $('#input');
@@ -541,6 +557,26 @@ function subscribe() {
   });
 
   api.onFocusRoom((roomId) => selectRoom(roomId));
+
+  api.onUpdate(({ version, state }) => {
+    const banner = $('#update-banner');
+    const button = $('#update-button');
+    banner.hidden = false;
+    if (state === 'downloading') {
+      $('#update-text').textContent = `Downloading ${version}…`;
+      button.disabled = true;
+      button.textContent = 'Downloading…';
+    } else if (state === 'ready') {
+      $('#update-text').textContent =
+        api.platform === 'darwin' ? `Version ${version} downloaded. Install it from the disk image.` : `Version ${version} is ready to install`;
+      button.hidden = api.platform === 'darwin';
+    } else {
+      $('#update-text').textContent = `Version ${version} is available`;
+      button.hidden = false;
+      button.disabled = false;
+      button.textContent = 'Update';
+    }
+  });
 }
 
 async function init() {

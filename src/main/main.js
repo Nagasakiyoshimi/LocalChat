@@ -4,6 +4,7 @@ import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { Store } from './store.js';
 import { Chat } from './chat.js';
+import { findUpdate, downloadUpdate, openInstaller } from './updater.js';
 
 // LOCALCHAT_PROFILE lets several instances run side by side on one machine (useful for testing).
 const profile = process.env.LOCALCHAT_PROFILE;
@@ -17,6 +18,8 @@ const downloadDir = path.join(app.getPath('downloads'), profile ? `LocalChat (${
 let win = null;
 let store;
 let chat;
+let pendingUpdate = null;
+let updateTimer = null;
 
 const send = (channel, payload) => win?.webContents.send(channel, payload);
 
@@ -68,6 +71,29 @@ function notify(message, room) {
   notification.show();
 }
 
+async function checkForUpdate({ manual = false } = {}) {
+  try {
+    const update = await findUpdate();
+    pendingUpdate = update;
+    if (update) send('app:update', { version: update.version, state: 'available' });
+    return update ? { version: update.version } : null;
+  } catch (err) {
+    console.warn('[update]', err.message);
+    if (manual) throw err;
+    return null;
+  }
+}
+
+async function installUpdate() {
+  const update = pendingUpdate ?? (await checkForUpdate());
+  if (!update) return null;
+  send('app:update', { version: update.version, state: 'downloading' });
+  const filePath = await downloadUpdate(update);
+  send('app:update', { version: update.version, state: 'ready' });
+  await openInstaller(filePath);
+  return { version: update.version, filePath };
+}
+
 function registerIpc() {
   const handlers = {
     'chat:state': () => chat.state(),
@@ -91,6 +117,8 @@ function registerIpc() {
     'file:show': (filePath) => shell.showItemInFolder(filePath),
     'file:open-downloads': () => shell.openPath(downloadDir),
     'app:set-badge': (count) => app.setBadgeCount(Math.max(0, Number(count) || 0)),
+    'app:check-update': () => checkForUpdate({ manual: true }),
+    'app:install-update': () => installUpdate(),
   };
   for (const [channel, handler] of Object.entries(handlers)) {
     ipcMain.handle(channel, (_event, ...args) => handler(...args));
@@ -116,6 +144,8 @@ app.whenReady().then(async () => {
 
   registerIpc();
   createWindow();
+  setTimeout(() => checkForUpdate(), 4_000);
+  updateTimer = setInterval(() => checkForUpdate(), 6 * 60 * 60 * 1000);
 
   try {
     await chat.start();
@@ -140,6 +170,7 @@ app.on('before-quit', async (event) => {
   if (quitting || !chat) return;
   event.preventDefault();
   quitting = true;
+  clearInterval(updateTimer);
   try {
     await chat.stop();
   } finally {

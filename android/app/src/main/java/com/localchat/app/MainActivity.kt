@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -17,6 +18,9 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import com.localchat.app.ui.LocalChatApp
 import com.localchat.app.ui.theme.LocalChatTheme
+import com.localchat.app.update.AppUpdate
+import com.localchat.app.update.downloadUpdate
+import com.localchat.app.update.findUpdate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -27,6 +31,7 @@ class MainActivity : ComponentActivity() {
     private var focused = true
     private var currentRoomId = "lobby"
     private var pendingPickRoom: String? = null
+    private var pendingUpdate: AppUpdate? = null
 
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -58,7 +63,19 @@ class MainActivity : ComponentActivity() {
         }
         app.chat.start()
 
+        val updateVersion = androidx.compose.runtime.mutableStateOf<String?>(null)
+        val updateBusy = androidx.compose.runtime.mutableStateOf(false)
+        lifecycleScope.launch {
+            val update = withContext(Dispatchers.IO) {
+                runCatching { findUpdate(BuildConfig.VERSION_NAME) }.getOrNull()
+            }
+            pendingUpdate = update
+            updateVersion.value = update?.version
+        }
+
         setContent {
+            val version = updateVersion.value
+            val busy = updateBusy.value
             LocalChatTheme {
                 LocalChatApp(
                     chat = app.chat,
@@ -69,6 +86,24 @@ class MainActivity : ComponentActivity() {
                     },
                     onOpenFile = { path -> openFile(path) },
                     onShareLog = { text -> shareLog(text) },
+                    updateVersion = version,
+                    updateBusy = busy,
+                    onInstallUpdate = {
+                        val update = pendingUpdate ?: return@LocalChatApp
+                        updateBusy.value = true
+                        lifecycleScope.launch {
+                            try {
+                                val file = withContext(Dispatchers.IO) {
+                                    downloadUpdate(update, File(cacheDir, update.name))
+                                }
+                                installApk(file)
+                            } catch (err: Exception) {
+                                DebugLog.log("update failed", err)
+                            } finally {
+                                updateBusy.value = false
+                            }
+                        }
+                    },
                 )
             }
         }
@@ -141,6 +176,19 @@ class MainActivity : ComponentActivity() {
         }
         runCatching { startActivity(Intent.createChooser(intent, "Share debug log")) }
             .onFailure { DebugLog.log("share log failed", it) }
+    }
+
+    private fun installApk(file: File) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+            return
+        }
+        val uri = FileProvider.getUriForFile(this, "$packageName.files", file)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        runCatching { startActivity(intent) }
     }
 
     private fun openFile(path: String) {

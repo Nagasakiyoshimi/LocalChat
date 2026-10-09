@@ -22,7 +22,9 @@ Download the latest build from the [Releases](../../releases) page:
 - **macOS:** `LocalChat-x.y.z.dmg`. The app is unsigned — right-click the app and choose **Open** the first time.
 - **Android:** `LocalChat-x.y.z.apk`. Open the file on your phone and allow installing from that source if asked. Grant notifications when asked. If something fails, open **Debug log** at the bottom of the home screen and tap **Share**.
 
-All devices must be on the same Wi‑Fi/LAN. Discovery uses UDP port 53318.
+All devices must be on the same Wi‑Fi/LAN for nearby chat. Discovery uses UDP port 53318.
+
+After this version, LocalChat checks GitHub for a newer release when it starts. Tap **Update** to download it. On Android, allow installs from LocalChat if the phone asks. On Mac, open the downloaded disk image and replace the old app.
 
 ## Develop
 
