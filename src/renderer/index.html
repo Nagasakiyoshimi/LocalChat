@@ -53,6 +53,7 @@
         <footer class="sidebar-footer">
           <button id="open-downloads" class="link-button">Open received files</button>
           <button id="check-update" class="link-button">Check for updates</button>
+          <button id="show-debug" class="link-button">Debug log</button>
         </footer>
       </aside>
 
@@ -89,6 +90,16 @@
           <button value="ok" class="primary-button" id="prompt-ok">OK</button>
         </menu>
       </form>
+    </dialog>
+
+    <dialog id="debug-dialog" class="debug-dialog">
+      <h3>Debug log</h3>
+      <pre id="debug-log"></pre>
+      <menu>
+        <button id="debug-clear" type="button" class="ghost-button">Clear</button>
+        <button id="debug-copy" type="button" class="ghost-button">Copy</button>
+        <button id="debug-close" type="button" class="primary-button">Close</button>
+      </menu>
     </dialog>
 
     <div id="toast" class="toast" hidden></div>

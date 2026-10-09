@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Network, MAX_TEXT_LENGTH } from './network.js';
-import { Relay, normalizeInviteCode } from './relay.js';
+import { Relay, makeInviteCode, normalizeInviteCode } from './relay.js';
+import { debug } from './debug-log.js';
 
 const LOBBY = { id: 'lobby', type: 'lobby', name: 'Everyone' };
 const MAX_MESSAGES_PER_ROOM = 2_000;
@@ -52,7 +53,7 @@ export class Chat extends EventEmitter {
     });
     this.#relay.on('members', () => this.emit('peers', this.peersState()));
     this.#relay.on('message', (packet) => this.#onRelayMessage(packet));
-    this.#relay.on('warning', (err) => console.warn('[relay]', err.message));
+    this.#relay.on('warning', (err) => debug(`invite warning: ${err.message}`));
   }
 
   get #data() {
@@ -61,9 +62,14 @@ export class Chat extends EventEmitter {
 
   async start() {
     await this.#network.start();
-    await this.#relay.start();
+    this.#relay.start();
     for (const room of this.#data.rooms) {
-      if (room.via === 'invite' && room.code) this.#relay.join(room.code).catch((err) => console.warn('[relay]', err.message));
+      if (room.via !== 'invite' || !room.code) continue;
+      const pending = room.inviteState === 'pending' || room.inviteState === 'failed';
+      const task = pending ? this.#relay.register(room.name, room.code) : this.#relay.join(room.code);
+      task
+        .then(() => this.#markInviteReady(room))
+        .catch((err) => debug(`invite ${room.code}: ${err.message}`));
     }
   }
 
@@ -113,12 +119,36 @@ export class Chat extends EventEmitter {
     return room;
   }
 
-  async createInvite(name) {
-    const created = await this.#relay.create(cleanName(name));
-    return (
-      this.#findRoom(created.roomId) ??
-      this.#addRoom({ id: created.roomId, type: 'group', name: created.name, code: created.code, via: 'invite' })
-    );
+  createInvite(name) {
+    const clean = cleanName(name);
+    const code = makeInviteCode();
+    const room = this.#addRoom({
+      id: `invite:${code}`,
+      type: 'group',
+      name: clean,
+      code,
+      via: 'invite',
+      inviteState: 'pending',
+    });
+    debug(`create room "${clean}" ${code} shown locally`);
+    this.#relay
+      .register(clean, code)
+      .then((created) => {
+        if (created.roomId && created.roomId !== room.id) {
+          room.id = created.roomId;
+          room.code = created.code;
+        }
+        if (created.name) room.name = created.name;
+        this.#markInviteReady(room);
+        debug(`create room ${room.code} registered`);
+      })
+      .catch((err) => {
+        room.inviteState = 'failed';
+        this.#store.save();
+        this.emit('rooms', this.#data.rooms);
+        debug(`create room ${code} failed: ${err.message}`);
+      });
+    return room;
   }
 
   async joinInvite(code) {
@@ -364,6 +394,13 @@ export class Chat extends EventEmitter {
     const room = this.#findRoom(id);
     if (!room) throw new Error('Room not found');
     return room;
+  }
+
+  #markInviteReady(room) {
+    if (room.inviteState === 'ready') return;
+    room.inviteState = 'ready';
+    this.#store.save();
+    this.emit('rooms', this.#data.rooms);
   }
 
   #addRoom(room) {

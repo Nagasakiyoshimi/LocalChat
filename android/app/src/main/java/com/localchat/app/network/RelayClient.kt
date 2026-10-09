@@ -50,10 +50,19 @@ class RelayClient(
 
     fun start() {
         closing.set(false)
+        DebugLog.log("invite connect now $url")
+        connect()
         scope.launch {
-            url = resolveUrl()
-            DebugLog.log("invite server $url")
-            connect()
+            val started = System.currentTimeMillis()
+            DebugLog.log("invite url lookup start")
+            val remote = resolveUrl()
+            DebugLog.log("invite url lookup ${System.currentTimeMillis() - started}ms -> $remote")
+            if (remote != url && remote.startsWith("ws") && !closing.get()) {
+                url = remote
+                DebugLog.log("invite switching url")
+                retryMs = 0
+                socket?.close(1000, "url")
+            }
         }
     }
 
@@ -64,11 +73,31 @@ class RelayClient(
         socket = null
     }
 
-    suspend fun create(name: String): JSONObject = request(JSONObject().put("type", "create").put("name", name))
+    suspend fun create(name: String, code: String = makeInviteCode()): JSONObject {
+        var attempt = 0
+        while (!closing.get()) {
+            attempt += 1
+            val started = System.currentTimeMillis()
+            DebugLog.log("register $code attempt $attempt ready=$ready socket=${socket != null}")
+            try {
+                val created = request(JSONObject().put("type", "create").put("name", name).put("code", code))
+                codes.add(code)
+                DebugLog.log("registered $code in ${System.currentTimeMillis() - started}ms")
+                return created
+            } catch (error: Exception) {
+                DebugLog.log("register $code attempt $attempt failed after ${System.currentTimeMillis() - started}ms: ${error.message}")
+                val message = error.message.orEmpty()
+                if (closing.get() || message.contains("empty", true) || message.contains("invalid", true)) throw error
+                delay((500L * attempt).coerceAtMost(5_000))
+            }
+        }
+        error("Invite server stopped")
+    }
 
     suspend fun join(code: String): JSONObject {
         val normalized = normalizeCode(code)
         codes.add(normalized)
+        DebugLog.log("invite join $normalized")
         return request(JSONObject().put("type", "join").put("code", normalized))
     }
 
@@ -100,6 +129,7 @@ class RelayClient(
         val deferred = CompletableDeferred<JSONObject>()
         pending[req] = deferred
         queue.add(packet)
+        DebugLog.log("request ${packet.optString("type")} ${packet.optString("code")} queued ready=$ready")
         flush()
         return try {
             withTimeout(20_000) { deferred.await() }
@@ -110,13 +140,17 @@ class RelayClient(
 
     private fun connect() {
         if (closing.get() || socket != null) return
+        val started = System.currentTimeMillis()
+        DebugLog.log("invite connecting $url")
         val request = Request.Builder().url(url).build()
         socket = http.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 ready = false
                 retryMs = 1000
+                DebugLog.log("invite socket open in ${System.currentTimeMillis() - started}ms")
                 val me = self()
                 webSocket.send(JSONObject().put("type", "hello").put("id", me.id).put("name", me.name).put("device", me.device).toString())
+                DebugLog.log("invite hello sent")
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -126,23 +160,28 @@ class RelayClient(
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 DebugLog.log("invite connection failed", t)
-                dropSocket()
+                dropSocket(webSocket)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                dropSocket()
+                DebugLog.log("invite socket closed $code $reason")
+                dropSocket(webSocket)
             }
         })
     }
 
-    private fun dropSocket() {
+    private fun dropSocket(webSocket: WebSocket) {
+        if (socket !== webSocket) return
         socket = null
         ready = false
+        queue.clear()
         pending.values.forEach { it.completeExceptionally(IllegalStateException("Invite server disconnected")) }
         pending.clear()
         if (!closing.get()) {
+            val wait = retryMs
+            DebugLog.log("invite retry in ${wait}ms")
             scope.launch {
-                delay(retryMs)
+                delay(wait)
                 retryMs = (retryMs * 2).coerceAtMost(15_000)
                 connect()
             }
@@ -157,14 +196,17 @@ class RelayClient(
         val current = socket ?: return
         while (true) {
             val packet = queue.poll() ?: break
+            DebugLog.log("send ${packet.optString("type")} ${packet.optString("code")}")
             current.send(packet.toString())
         }
     }
 
     private fun handle(packet: JSONObject) {
         when (packet.optString("type")) {
+            "ping" -> Unit
             "hello" -> {
                 ready = true
+                DebugLog.log("invite hello ok rejoining ${codes.size} rooms")
                 for (code in codes) {
                     queue.add(JSONObject().put("type", "join").put("code", code).put("req", "rejoin:$code"))
                 }
@@ -198,12 +240,22 @@ class RelayClient(
     }
 
     private fun resolveUrl(): String {
+        val lookup = http.newBuilder().callTimeout(4, TimeUnit.SECONDS).readTimeout(4, TimeUnit.SECONDS).build()
         val remote = runCatching {
-            http.newCall(Request.Builder().url(RELAY_URL_SOURCE).build()).execute().use { response ->
+            lookup.newCall(Request.Builder().url(RELAY_URL_SOURCE).build()).execute().use { response ->
                 response.body?.string()?.trim().orEmpty()
             }
-        }.getOrNull()
+        }.onFailure { DebugLog.log("invite url lookup failed", it) }.getOrNull()
         return if (remote != null && remote.startsWith("ws")) remote else url
+    }
+}
+
+fun makeInviteCode(): String {
+    val alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    val bytes = ByteArray(8)
+    java.security.SecureRandom().nextBytes(bytes)
+    return buildString(8) {
+        for (b in bytes) append(alphabet[(b.toInt() and 0xff) % alphabet.length])
     }
 }
 

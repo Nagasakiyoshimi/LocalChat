@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld('localchat', {
   setBadge: (count) => ipcRenderer.invoke('app:set-badge', count),
   checkUpdate: () => ipcRenderer.invoke('app:check-update'),
   installUpdate: () => ipcRenderer.invoke('app:install-update'),
+  getDebugLog: () => ipcRenderer.invoke('app:debug-log'),
+  clearDebugLog: () => ipcRenderer.invoke('app:debug-clear'),
 
   onMe: subscribe('chat:me'),
   onRooms: subscribe('chat:rooms'),
@@ -36,4 +38,5 @@ contextBridge.exposeInMainWorld('localchat', {
   onMessageUpdate: subscribe('chat:message-update'),
   onFocusRoom: subscribe('chat:focus-room'),
   onUpdate: subscribe('app:update'),
+  onDebug: subscribe('app:debug'),
 });

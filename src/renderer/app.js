@@ -137,6 +137,8 @@ function roomSubtitle(room) {
     return n ? `Everyone on this network · ${n} ${n === 1 ? 'device' : 'devices'} nearby` : 'Looking for devices on this network…';
   }
   if (room.via === 'invite') {
+    if (room.inviteState === 'failed') return `Invite code ${room.code} · couldn't register yet · open Debug log`;
+    if (room.inviteState === 'pending') return `Invite code ${room.code} · connecting…`;
     const online = state.inviteMembers?.[room.id] ?? 0;
     return `Invite code ${room.code} · ${online} online · anyone on the internet can join`;
   }
@@ -180,7 +182,11 @@ function renderSidebar() {
   const groups = state.rooms.filter((r) => r.type !== 'dm');
   $('#room-list').replaceChildren(
     ...groups.map((room) =>
-      roomButton(room, icon(room.type === 'lobby' ? 'globe' : 'hash', 'room-icon'), room.code || null),
+      roomButton(
+        room,
+        icon(room.type === 'lobby' ? 'globe' : 'hash', 'room-icon'),
+        room.inviteState === 'pending' ? `${room.code} · connecting` : room.inviteState === 'failed' ? `${room.code} · not registered` : room.code || null,
+      ),
     ),
   );
 
@@ -434,6 +440,17 @@ function wireEvents() {
   });
 
   $('#open-downloads').addEventListener('click', () => run(api.openDownloads()));
+  $('#show-debug').addEventListener('click', () => openDebug());
+  $('#debug-close').addEventListener('click', () => $('#debug-dialog').close());
+  $('#debug-copy').addEventListener('click', async () => {
+    await navigator.clipboard.writeText($('#debug-log').textContent);
+    toast('Debug log copied');
+  });
+  $('#debug-clear').addEventListener('click', async () => {
+    await api.clearDebugLog();
+    debugLines.length = 0;
+    $('#debug-log').textContent = '';
+  });
   $('#check-update').addEventListener('click', async () => {
     const button = $('#check-update');
     button.disabled = true;
@@ -507,6 +524,17 @@ function wireEvents() {
   });
 }
 
+const debugLines = [];
+
+async function openDebug() {
+  const dump = await api.getDebugLog();
+  debugLines.splice(0, debugLines.length, ...dump.split('\n').filter(Boolean));
+  const pre = $('#debug-log');
+  pre.textContent = debugLines.join('\n');
+  $('#debug-dialog').showModal();
+  pre.scrollTop = pre.scrollHeight;
+}
+
 function subscribe() {
   api.onMe((me) => {
     state.me = me;
@@ -557,6 +585,15 @@ function subscribe() {
   });
 
   api.onFocusRoom((roomId) => selectRoom(roomId));
+
+  api.onDebug((line) => {
+    if (!line) return;
+    debugLines.push(line);
+    const pre = $('#debug-log');
+    if (!$('#debug-dialog').open) return;
+    pre.textContent = debugLines.join('\n');
+    pre.scrollTop = pre.scrollHeight;
+  });
 
   api.onUpdate(({ version, state }) => {
     const banner = $('#update-banner');

@@ -63,7 +63,11 @@ class ChatEngine(context: Context) {
             val code = room.code
             if (room.via == "invite" && !code.isNullOrBlank()) {
                 scope.launch(Dispatchers.IO) {
-                    runCatching { relay.join(code) }.onFailure { DebugLog.log("rejoin $code failed", it) }
+                    val pending = room.inviteState == "pending" || room.inviteState == "failed"
+                    val result = if (pending) runCatching { relay.create(room.name, code) } else runCatching { relay.join(code) }
+                    result.onSuccess {
+                        scope.launch { markInviteReady(room.id) }
+                    }.onFailure { DebugLog.log("invite $code failed", it) }
                 }
             }
         }
@@ -89,9 +93,35 @@ class ChatEngine(context: Context) {
         return room
     }
 
-    suspend fun createInvite(name: String): Room {
-        val created = withContext(Dispatchers.IO) { relay.create(cleanName(name)) }
-        return store.rooms.find { it.id == created.getString("roomId") } ?: ensureInviteRoom(created)
+    fun createInvite(name: String): Room {
+        val clean = cleanName(name)
+        val code = makeInviteCode()
+        val room = Room(
+            id = "invite:$code",
+            type = "group",
+            name = clean,
+            code = code,
+            via = "invite",
+            inviteState = "pending",
+        )
+        store.rooms.add(room)
+        changed(announce = false)
+        DebugLog.log("create room \"$clean\" $code shown locally")
+        scope.launch(Dispatchers.IO) {
+            runCatching { relay.create(clean, code) }
+                .onSuccess { DebugLog.log("create room $code confirmed by server") }
+                .onFailure { error ->
+                    DebugLog.log("create room $code failed", error)
+                    withContext(Dispatchers.Main) {
+                        val idx = store.rooms.indexOfFirst { it.id == room.id }
+                        if (idx >= 0 && store.rooms[idx].inviteState != "ready") {
+                            store.rooms[idx] = store.rooms[idx].copy(inviteState = "failed")
+                            changed(announce = false)
+                        }
+                    }
+                }
+        }
+        return room
     }
 
     suspend fun joinInvite(code: String): Room {
@@ -339,15 +369,34 @@ class ChatEngine(context: Context) {
         )
     }
 
+    private fun markInviteReady(roomId: String) {
+        val idx = store.rooms.indexOfFirst { it.id == roomId }
+        if (idx < 0 || store.rooms[idx].inviteState == "ready") return
+        store.rooms[idx] = store.rooms[idx].copy(inviteState = "ready")
+        changed(announce = false)
+    }
+
     private fun ensureInviteRoom(packet: JSONObject): Room {
         val id = packet.getString("roomId")
-        store.rooms.find { it.id == id }?.let { return it }
+        store.rooms.find { it.id == id }?.let { existing ->
+            if (existing.inviteState == "pending" || existing.inviteState == "failed") {
+                val ready = existing.copy(
+                    inviteState = "ready",
+                    name = packet.optString("name").ifBlank { existing.name },
+                )
+                store.rooms[store.rooms.indexOf(existing)] = ready
+                changed(announce = false)
+                return ready
+            }
+            return existing
+        }
         val room = Room(
             id = id,
             type = "group",
             name = packet.optString("name").ifBlank { "Room" },
             code = packet.optString("code"),
             via = "invite",
+            inviteState = "ready",
         )
         store.rooms.add(room)
         changed(announce = false)

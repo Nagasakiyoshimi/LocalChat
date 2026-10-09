@@ -336,9 +336,14 @@ private fun HomeScreen(
                     }
                 }
                 items(state.rooms.filter { it.type != "dm" }, key = { it.id }) { room ->
+                    val roomSub = when (room.inviteState) {
+                        "pending" -> "${room.code} · connecting"
+                        "failed" -> "${room.code} · not registered"
+                        else -> room.code
+                    }
                     RoomRow(
                         title = room.name,
-                        subtitle = room.code,
+                        subtitle = roomSub,
                         icon = if (room.type == "lobby") Icons.Default.Public else Icons.Default.Tag,
                         selected = room.id == currentRoomId,
                         badge = unread[room.id] ?: 0,
@@ -425,6 +430,10 @@ private fun HomeScreen(
 private fun DebugScreen(onBack: () -> Unit, onShare: () -> Unit) {
     val text by DebugLog.text.collectAsState()
     val scroll = rememberScrollState()
+    LaunchedEffect(text) {
+        kotlinx.coroutines.delay(32)
+        scroll.scrollTo(scroll.maxValue)
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -589,6 +598,8 @@ private fun ChatScreen(
         else -> room.name
     }
     val subtitle = when {
+        room.via == "invite" && room.inviteState == "failed" -> "Code ${room.code} · couldn't register yet · see Debug log"
+        room.via == "invite" && room.inviteState == "pending" -> "Code ${room.code} · connecting…"
         room.via == "invite" -> {
             val online = state.inviteMembers[room.id] ?: 0
             "Code ${room.code} · $online online"

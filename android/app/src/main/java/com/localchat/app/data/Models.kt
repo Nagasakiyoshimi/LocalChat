@@ -9,6 +9,7 @@ data class Room(
     val peerId: String? = null,
     val code: String? = null,
     val via: String? = null,
+    val inviteState: String? = null,
 )
 
 data class PeerRoom(val id: String, val name: String)

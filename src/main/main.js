@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { Store } from './store.js';
 import { Chat } from './chat.js';
 import { findUpdate, downloadUpdate, openInstaller } from './updater.js';
+import { debugDump, debugClear, debugLog } from './debug-log.js';
 
 // LOCALCHAT_PROFILE lets several instances run side by side on one machine (useful for testing).
 const profile = process.env.LOCALCHAT_PROFILE;
@@ -119,6 +120,11 @@ function registerIpc() {
     'app:set-badge': (count) => app.setBadgeCount(Math.max(0, Number(count) || 0)),
     'app:check-update': () => checkForUpdate({ manual: true }),
     'app:install-update': () => installUpdate(),
+    'app:debug-log': () => debugDump(),
+    'app:debug-clear': () => {
+      debugClear();
+      return '';
+    },
   };
   for (const [channel, handler] of Object.entries(handlers)) {
     ipcMain.handle(channel, (_event, ...args) => handler(...args));
@@ -141,6 +147,7 @@ app.whenReady().then(async () => {
     if (message.incoming && !message.quiet) notify(message, room);
   });
   chat.on('message-update', (message) => send('chat:message-update', message));
+  debugLog.on('line', (line) => send('app:debug', line));
 
   registerIpc();
   createWindow();

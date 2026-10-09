@@ -16,6 +16,7 @@ const DATA_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'data')
 const STORE_FILE = path.join(DATA_DIR, 'rooms.json');
 
 const rooms = new Map();
+const clients = new Set();
 
 function loadRooms() {
   try {
@@ -100,13 +101,26 @@ function acceptMessage(client, packet) {
     return;
   }
 
+  if (packet.type === 'ping') return;
+
   if (!client.ready) return client.send({ type: 'error', error: 'Say hello first' });
 
   if (packet.type === 'create') {
     const name = String(packet.name ?? '').trim().slice(0, 40);
     if (!name) return client.fail(packet, 'Name cannot be empty');
-    let code = makeCode();
-    while (rooms.has(code)) code = makeCode();
+    let code = String(packet.code ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const existing = /^[A-Z0-9]{8}$/.test(code) ? rooms.get(code) : null;
+    if (existing) {
+      existing.members.add(client);
+      client.rooms.add(code);
+      client.send({ type: 'created', req: packet.req, code, roomId: existing.roomId, name: existing.name });
+      client.send({ type: 'members', code, roomId: existing.roomId, members: membersOf(existing) });
+      return;
+    }
+    if (!/^[A-Z0-9]{8}$/.test(code)) {
+      code = makeCode();
+      while (rooms.has(code)) code = makeCode();
+    }
     const room = {
       code,
       name,
@@ -217,6 +231,7 @@ function sanitizeEnvelope(input, room) {
 
 class Client {
   constructor(socket) {
+    clients.add(this);
     this.socket = socket;
     this.buffer = Buffer.alloc(0);
     this.fragments = [];
@@ -251,6 +266,7 @@ class Client {
   }
 
   #closed() {
+    clients.delete(this);
     for (const code of [...this.rooms]) leave(this, code);
   }
 
@@ -337,6 +353,10 @@ server.on('upgrade', (req, socket) => {
   );
   new Client(socket);
 });
+
+setInterval(() => {
+  for (const client of clients) client.send({ type: 'ping' });
+}, 20_000);
 
 server.listen(PORT, HOST, () => {
   console.log(`LocalChat relay on ws://${HOST}:${PORT} (${rooms.size} rooms)`);

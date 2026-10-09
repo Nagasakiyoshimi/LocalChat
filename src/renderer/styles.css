@@ -685,6 +685,23 @@ button {
 
 /* ---------- Dialog & toast ---------- */
 
+dialog.debug-dialog {
+  width: min(640px, calc(100vw - 32px));
+
+  pre {
+    max-height: 360px;
+    margin: 0 0 12px;
+    padding: 10px;
+    overflow: auto;
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text);
+    font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+}
+
 dialog {
   width: 360px;
   padding: 20px;
