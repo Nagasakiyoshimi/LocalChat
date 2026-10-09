@@ -81,6 +81,8 @@ function registerIpc() {
       if (!result.canceled) await chat.sendFiles(roomId, result.filePaths);
     },
     'chat:create-room': (name) => chat.createRoom(name),
+    'chat:create-invite': (name) => chat.createInvite(name),
+    'chat:join-invite': (code) => chat.joinInvite(code),
     'chat:join-room': (roomId) => chat.joinRoom(roomId),
     'chat:leave-room': (roomId) => chat.leaveRoom(roomId),
     'chat:open-direct': (peerId) => chat.openDirect(peerId),
@@ -108,7 +110,7 @@ app.whenReady().then(async () => {
   chat.on('peers', (peers) => send('chat:peers', peers));
   chat.on('message', (message, room) => {
     send('chat:message', message);
-    if (message.incoming) notify(message, room);
+    if (message.incoming && !message.quiet) notify(message, room);
   });
   chat.on('message-update', (message) => send('chat:message-update', message));
 

@@ -22,7 +22,10 @@
           <section>
             <h2>
               Rooms
-              <button id="new-room" class="icon-button" title="Create room" aria-label="Create room"></button>
+              <span class="header-actions">
+                <button id="join-code" class="join-button" title="Join with an invite code">Join</button>
+                <button id="new-room" class="icon-button" title="Create an invite room" aria-label="Create an invite room"></button>
+              </span>
             </h2>
             <ul id="room-list" class="list"></ul>
           </section>
@@ -54,6 +57,7 @@
             <h1 id="room-title"></h1>
             <p id="room-subtitle"></p>
           </div>
+          <button id="copy-invite" class="ghost-button no-drag" hidden>Copy code</button>
           <button id="leave-room" class="ghost-button no-drag"></button>
         </header>
 

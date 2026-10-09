@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Network, MAX_TEXT_LENGTH } from './network.js';
+import { Relay, normalizeInviteCode } from './relay.js';
 
 const LOBBY = { id: 'lobby', type: 'lobby', name: 'Everyone' };
 const MAX_MESSAGES_PER_ROOM = 2_000;
@@ -26,6 +27,7 @@ const cleanName = (name) => {
 export class Chat extends EventEmitter {
   #store;
   #network;
+  #relay;
   #downloadDir;
 
   constructor({ store, downloadDir }) {
@@ -43,18 +45,31 @@ export class Chat extends EventEmitter {
     this.#network.on('peers', () => this.emit('peers', this.peersState()));
     this.#network.on('message', (msg) => this.#onIncoming(msg));
     this.#network.on('warning', (err) => console.warn('[network]', err.message));
+
+    this.#relay = new Relay(() => {
+      const { id, name } = this.#data.me;
+      return { id, name, device: os.hostname() };
+    });
+    this.#relay.on('members', () => this.emit('peers', this.peersState()));
+    this.#relay.on('message', (packet) => this.#onRelayMessage(packet));
+    this.#relay.on('warning', (err) => console.warn('[relay]', err.message));
   }
 
   get #data() {
     return this.#store.data;
   }
 
-  start() {
-    return this.#network.start();
+  async start() {
+    await this.#network.start();
+    await this.#relay.start();
+    for (const room of this.#data.rooms) {
+      if (room.via === 'invite' && room.code) this.#relay.join(room.code).catch((err) => console.warn('[relay]', err.message));
+    }
   }
 
-  stop() {
-    return this.#network.stop();
+  async stop() {
+    this.#relay.stop();
+    await this.#network.stop();
   }
 
   state() {
@@ -80,7 +95,7 @@ export class Chat extends EventEmitter {
         discover.set(room.id, entry);
       }
     }
-    return { peers, discover: [...discover.values()] };
+    return { peers, discover: [...discover.values()], inviteMembers: this.#relay?.counts() ?? {} };
   }
 
   // ---------- Profile & rooms ----------
@@ -98,6 +113,28 @@ export class Chat extends EventEmitter {
     return room;
   }
 
+  async createInvite(name) {
+    const created = await this.#relay.create(cleanName(name));
+    return (
+      this.#findRoom(created.roomId) ??
+      this.#addRoom({ id: created.roomId, type: 'group', name: created.name, code: created.code, via: 'invite' })
+    );
+  }
+
+  async joinInvite(code) {
+    const normalized = normalizeInviteCode(code);
+    const existing = this.#data.rooms.find((room) => room.code === normalized);
+    if (existing) {
+      await this.#relay.join(normalized);
+      return existing;
+    }
+    const joined = await this.#relay.join(normalized);
+    return (
+      this.#findRoom(joined.roomId) ??
+      this.#addRoom({ id: joined.roomId, type: 'group', name: joined.name, code: joined.code, via: 'invite' })
+    );
+  }
+
   joinRoom(roomId) {
     const existing = this.#findRoom(roomId);
     if (existing) return existing;
@@ -113,6 +150,7 @@ export class Chat extends EventEmitter {
     if (roomId === LOBBY.id) throw new Error('You cannot leave the Everyone room');
     const room = this.#findRoom(roomId);
     this.#data.rooms = this.#data.rooms.filter((r) => r.id !== roomId);
+    if (room?.via === 'invite' && room.code) this.#relay.leave(room.code);
     if (room?.type === 'dm') delete this.#data.messages[roomId];
     this.#changed({ rooms: true, peers: true });
   }
@@ -162,6 +200,30 @@ export class Chat extends EventEmitter {
     this.#append(record);
     this.emit('message', record, room);
 
+    if (room.via === 'invite') {
+      const envelope = {
+        id: record.id,
+        from: record.from,
+        ts: record.ts,
+        text: record.text,
+        room: { id: room.id, type: 'group', name: room.name },
+      };
+      try {
+        if (record.file?.path) await this.#relay.sendFile(room.code, envelope, record.file.path);
+        else await this.#relay.sendMessage(room.code, envelope);
+        const others = Math.max(0, (this.#relay.counts()[room.id] ?? 1) - 1);
+        record.recipients = others;
+        record.delivered = others;
+        record.status = 'sent';
+      } catch (err) {
+        record.status = 'failed';
+        record.error = err.message;
+      }
+      this.#store.save();
+      this.emit('message-update', record);
+      return;
+    }
+
     const targets = this.#targets(room);
     const envelope = {
       id: record.id,
@@ -201,19 +263,52 @@ export class Chat extends EventEmitter {
 
   // ---------- Receiving ----------
 
-  #onIncoming(msg) {
-    const room = this.#roomForIncoming(msg);
+  async #onRelayMessage(packet) {
+    const envelope = packet.envelope;
+    if (!envelope?.room?.id) return;
+    let file = packet.file ? { name: packet.file.name, size: Number(packet.file.size) || 0 } : undefined;
+    if (packet.file?.data) {
+      file = await this.#saveIncomingFile(packet.file.name, packet.file.data);
+    }
+    this.#onIncoming({ ...envelope, file }, { history: Boolean(packet.history) });
+  }
+
+  async #saveIncomingFile(name, base64) {
+    await fs.promises.mkdir(this.#downloadDir, { recursive: true });
+    const safe = path.basename(String(name || 'file')).replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').slice(0, 200) || 'file';
+    const parsed = path.parse(safe);
+    let filePath;
+    for (let i = 0; ; i++) {
+      filePath = path.join(this.#downloadDir, i ? `${parsed.name} (${i})${parsed.ext}` : safe);
+      try {
+        const handle = await fs.promises.open(filePath, 'wx');
+        await handle.writeFile(Buffer.from(base64, 'base64'));
+        await handle.close();
+        break;
+      } catch (err) {
+        if (err.code !== 'EEXIST') throw err;
+      }
+    }
+    const stat = await fs.promises.stat(filePath);
+    return { name: path.basename(filePath), size: stat.size, path: filePath, url: pathToFileURL(filePath).href };
+  }
+
+  #onIncoming(msg, { history = false } = {}) {
+    const room = history ? this.#findRoom(msg.room?.id) : this.#roomForIncoming(msg);
     if (!room) return;
     if (this.#data.messages[room.id]?.some((m) => m.id === msg.id)) return;
 
+    const mine = msg.from?.id === this.#data.me.id;
     const record = {
       id: msg.id,
       roomId: room.id,
       from: msg.from,
       ts: msg.ts,
       text: msg.text,
-      incoming: true,
-      ...(msg.file && { file: { ...msg.file, url: pathToFileURL(msg.file.path).href } }),
+      incoming: !mine,
+      quiet: history,
+      ...(mine && { status: 'sent' }),
+      ...(msg.file && { file: { ...msg.file, ...(msg.file.path ? { url: pathToFileURL(msg.file.path).href } : {}) } }),
     };
     this.#append(record);
     this.emit('message', record, room);
@@ -243,7 +338,7 @@ export class Chat extends EventEmitter {
       name: me.name,
       device: os.hostname(),
       rooms: rooms
-        .filter((r) => r.type === 'group')
+        .filter((r) => r.type === 'group' && r.via !== 'invite')
         .slice(0, 50)
         .map(({ id, name }) => ({ id, name })),
     };

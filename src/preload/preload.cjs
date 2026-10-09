@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('localchat', {
   sendFiles: (roomId, filePaths) => ipcRenderer.invoke('chat:send-files', roomId, filePaths),
   pickFiles: (roomId) => ipcRenderer.invoke('chat:pick-files', roomId),
   createRoom: (name) => ipcRenderer.invoke('chat:create-room', name),
+  createInvite: (name) => ipcRenderer.invoke('chat:create-invite', name),
+  joinInvite: (code) => ipcRenderer.invoke('chat:join-invite', code),
   joinRoom: (roomId) => ipcRenderer.invoke('chat:join-room', roomId),
   leaveRoom: (roomId) => ipcRenderer.invoke('chat:leave-room', roomId),
   openDirect: (peerId) => ipcRenderer.invoke('chat:open-direct', peerId),

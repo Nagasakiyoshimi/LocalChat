@@ -86,6 +86,8 @@ class Store(private val file: File, defaultName: String) {
             type = o.getString("type"),
             name = o.getString("name"),
             peerId = if (o.has("peerId") && !o.isNull("peerId")) o.getString("peerId") else null,
+            code = if (o.has("code") && !o.isNull("code")) o.getString("code") else null,
+            via = if (o.has("via") && !o.isNull("via")) o.getString("via") else null,
         )
 
         private fun roomJson(r: Room) = JSONObject()
@@ -93,6 +95,8 @@ class Store(private val file: File, defaultName: String) {
             .put("type", r.type)
             .put("name", r.name)
             .put("peerId", r.peerId)
+            .put("code", r.code)
+            .put("via", r.via)
 
         private fun parseMessage(o: JSONObject): ChatMessage {
             val from = o.getJSONObject("from")

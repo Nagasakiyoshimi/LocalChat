@@ -20,6 +20,7 @@ const state = {
   messages: {},
   peers: [],
   discover: [],
+  inviteMembers: {},
   current: 'lobby',
   unread: {},
 };
@@ -135,6 +136,10 @@ function roomSubtitle(room) {
     const n = state.peers.length;
     return n ? `Everyone on this network · ${n} ${n === 1 ? 'device' : 'devices'} nearby` : 'Looking for devices on this network…';
   }
+  if (room.via === 'invite') {
+    const online = state.inviteMembers?.[room.id] ?? 0;
+    return `Invite code ${room.code} · ${online} online · anyone on the internet can join`;
+  }
   if (room.type === 'dm') {
     const peer = peerById(room.peerId);
     return peer ? `Online · ${peer.device || peer.address}` : 'Offline · messages will not be delivered';
@@ -174,7 +179,9 @@ function roomButton(room, leading, sub) {
 function renderSidebar() {
   const groups = state.rooms.filter((r) => r.type !== 'dm');
   $('#room-list').replaceChildren(
-    ...groups.map((room) => roomButton(room, icon(room.type === 'lobby' ? 'globe' : 'hash', 'room-icon'))),
+    ...groups.map((room) =>
+      roomButton(room, icon(room.type === 'lobby' ? 'globe' : 'hash', 'room-icon'), room.code || null),
+    ),
   );
 
   const dms = state.rooms.filter((r) => r.type === 'dm').sort((a, b) => lastTs(b) - lastTs(a));
@@ -236,6 +243,9 @@ function renderHeader() {
   const leave = $('#leave-room');
   leave.hidden = room.type === 'lobby';
   leave.textContent = room.type === 'dm' ? 'Delete chat' : 'Leave room';
+  const copy = $('#copy-invite');
+  copy.hidden = !room.code;
+  copy.textContent = room.code ? room.code : 'Copy code';
   $('#input').placeholder = `Message ${room.type === 'group' ? `#${room.name}` : roomName(room)}`;
 }
 
@@ -245,7 +255,9 @@ function emptyState(room) {
       ? ['Say hi to everyone nearby', 'Messages here go to every LocalChat user on this network.']
       : room.type === 'dm'
         ? [`This is the start of your chat with ${roomName(room)}`, 'Only the two of you can see these messages.']
-        : [`Welcome to #${room.name}`, 'Others on this network can find and join this room from their sidebar.'];
+        : room.via === 'invite'
+          ? [`Invite code ${room.code}`, 'Send this code to anyone. They can join from the internet with Join.']
+          : [`Welcome to #${room.name}`, 'Others on this network can find and join this room from their sidebar.'];
   return h('div', { class: 'empty-state' }, h('div', {}, h('strong', {}, title), body));
 }
 
@@ -386,8 +398,28 @@ function wireEvents() {
   });
 
   $('#new-room').addEventListener('click', async () => {
-    const name = await prompt('Create a room', '', 'Create');
-    if (name) run(api.createRoom(name).then((room) => selectRoom(room.id)));
+    const name = await prompt('Create an invite room', '', 'Create');
+    if (name) run(api.createInvite(name).then((room) => selectRoom(room.id)));
+  });
+
+  $('#join-code').addEventListener('click', async () => {
+    const code = await prompt('Invite code', '', 'Join');
+    if (code) run(api.joinInvite(code).then((room) => selectRoom(room.id)));
+  });
+
+  $('#copy-invite').addEventListener('click', async () => {
+    const code = currentRoom()?.code;
+    if (!code) return;
+    const button = $('#copy-invite');
+    try {
+      await navigator.clipboard.writeText(code);
+      button.textContent = 'Copied';
+      setTimeout(() => {
+        if (currentRoom()?.code === code) button.textContent = code;
+      }, 1200);
+    } catch {
+      toast(code);
+    }
   });
 
   $('#leave-room').addEventListener('click', () => {
@@ -395,7 +427,9 @@ function wireEvents() {
     const question =
       room.type === 'dm'
         ? `Delete your chat history with ${roomName(room)}?`
-        : `Leave #${room.name}? Your messages stay on this device if you join the room again.`;
+        : room.via === 'invite'
+          ? `Leave #${room.name}? The code ${room.code} still works. Your messages stay on this device.`
+          : `Leave #${room.name}? Your messages stay on this device if you join the room again.`;
     if (confirm(question)) run(api.leaveRoom(room.id));
   });
 
@@ -475,9 +509,10 @@ function subscribe() {
     }
   });
 
-  api.onPeers(({ peers, discover }) => {
+  api.onPeers(({ peers, discover, inviteMembers }) => {
     state.peers = peers;
     state.discover = discover;
+    state.inviteMembers = inviteMembers ?? {};
     renderSidebar();
     renderHeader();
   });
@@ -488,7 +523,7 @@ function subscribe() {
     list.push(message);
     const isCurrent = message.roomId === state.current;
     if (isCurrent) appendMessage(message);
-    if (message.incoming && (!isCurrent || !document.hasFocus())) {
+    if (message.incoming && !message.quiet && (!isCurrent || !document.hasFocus())) {
       state.unread[message.roomId] = (state.unread[message.roomId] ?? 0) + 1;
     }
     renderSidebar();

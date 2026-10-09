@@ -65,6 +65,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -134,15 +136,29 @@ fun LocalChatApp(
             },
         )
         is PromptKind.CreateRoom -> NameDialog(
-            title = "Create a room",
+            title = "Create an invite room",
             initial = "",
             confirmLabel = "Create",
             onDismiss = { prompt = null },
             onConfirm = {
                 prompt = null
                 run {
-                    val created = chat.createRoom(it)
+                    val created = chat.createInvite(it)
                     currentRoomId = created.id
+                    showChat = true
+                }
+            },
+        )
+        is PromptKind.JoinCode -> NameDialog(
+            title = "Invite code",
+            initial = "",
+            confirmLabel = "Join",
+            onDismiss = { prompt = null },
+            onConfirm = {
+                prompt = null
+                run {
+                    val joined = chat.joinInvite(it)
+                    currentRoomId = joined.id
                     showChat = true
                 }
             },
@@ -178,6 +194,7 @@ fun LocalChatApp(
             unread = unread,
             onRename = { prompt = PromptKind.Rename },
             onCreateRoom = { prompt = PromptKind.CreateRoom },
+            onJoinCode = { prompt = PromptKind.JoinCode },
             onSelectRoom = {
                 currentRoomId = it
                 unread.remove(it)
@@ -230,6 +247,7 @@ private fun UnreadTracker(
 private sealed class PromptKind {
     data object Rename : PromptKind()
     data object CreateRoom : PromptKind()
+    data object JoinCode : PromptKind()
 }
 
 @Composable
@@ -266,6 +284,7 @@ private fun HomeScreen(
     unread: Map<String, Int>,
     onRename: () -> Unit,
     onCreateRoom: () -> Unit,
+    onJoinCode: () -> Unit,
     onSelectRoom: (String) -> Unit,
     onJoinRoom: (String) -> Unit,
     onOpenDirect: (String) -> Unit,
@@ -290,10 +309,15 @@ private fun HomeScreen(
 
             LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 24.dp)) {
                 item { SectionHeader("Rooms", actionIcon = Icons.Default.Add, onAction = onCreateRoom) }
+                item {
+                    TextButton(onClick = onJoinCode, modifier = Modifier.padding(horizontal = 8.dp)) {
+                        Text("Join with a code")
+                    }
+                }
                 items(state.rooms.filter { it.type != "dm" }, key = { it.id }) { room ->
                     RoomRow(
                         title = room.name,
-                        subtitle = null,
+                        subtitle = room.code,
                         icon = if (room.type == "lobby") Icons.Default.Public else Icons.Default.Tag,
                         selected = room.id == currentRoomId,
                         badge = unread[room.id] ?: 0,
@@ -543,12 +567,16 @@ private fun ChatScreen(
         "dm" -> state.peers.find { it.id == room.peerId }?.name ?: room.name
         else -> room.name
     }
-    val subtitle = when (room.type) {
-        "lobby" -> {
+    val subtitle = when {
+        room.via == "invite" -> {
+            val online = state.inviteMembers[room.id] ?: 0
+            "Code ${room.code} · $online online"
+        }
+        room.type == "lobby" -> {
             val n = state.peers.size
             if (n == 0) "Looking for devices…" else "Everyone on this network · $n nearby"
         }
-        "dm" -> {
+        room.type == "dm" -> {
             val peer = state.peers.find { it.id == room.peerId }
             if (peer != null) "Online · ${peer.device.ifBlank { peer.address }}" else "Offline"
         }
@@ -578,6 +606,12 @@ private fun ChatScreen(
                     }
                 },
                 actions = {
+                    if (room.code != null) {
+                        val clipboard = LocalClipboardManager.current
+                        TextButton(onClick = { clipboard.setText(AnnotatedString(room.code)) }) {
+                            Text(room.code)
+                        }
+                    }
                     if (room.type != "lobby") {
                         TextButton(onClick = onLeave) {
                             Text(if (room.type == "dm") "Delete" else "Leave")

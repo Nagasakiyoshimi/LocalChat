@@ -2,7 +2,17 @@
 
 Serverless chat rooms and file sharing for devices on the same local network — like LocalSend, with chat.
 
-Works across **Windows**, **macOS**, and **Android** on the same Wi‑Fi.
+Works across **Windows**, **macOS**, and **Android**. Devices on the same Wi‑Fi see each other automatically. An invite code also lets someone on the internet join a room.
+
+## Invite codes
+
+1. Tap **+** and name the room. LocalChat shows a code such as `K7M2PQ4H`.
+2. Send that code to the other person.
+3. They tap **Join** (or **Join with a code**) and enter it.
+
+The code keeps working after the app restarts. Messages in that room are saved on each device, and recent text is replayed when someone joins. Files sent with a code can be up to 8 MB.
+
+The invite server is a small relay (`npm run relay`). The current public address is in `relay/url.txt`. That address is a tunnel from this Mac, so the Mac has to stay awake and the relay has to keep running or new joins will fail until the tunnel is started again.
 
 ## Install
 

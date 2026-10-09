@@ -1,7 +1,7 @@
 {
   "name": "localchat",
   "productName": "LocalChat",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "description": "Serverless LAN chat rooms and file sharing, like LocalSend with chat.",
   "author": "Nagasakiyoshimi",
   "type": "module",
@@ -9,6 +9,7 @@
   "scripts": {
     "start": "electron .",
     "start:second": "LOCALCHAT_PROFILE=2 electron .",
+    "relay": "node relay/server.mjs",
     "dist": "electron-builder"
   },
   "build": {

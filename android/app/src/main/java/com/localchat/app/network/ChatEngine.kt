@@ -32,6 +32,12 @@ class ChatEngine(context: Context) {
         defaultName = deviceName(),
     )
 
+    private val relay = RelayClient(
+        self = { SelfInfo(store.me.id, store.me.name, deviceName(), emptyList()) },
+        onRoom = { packet -> scope.launch { ensureInviteRoom(packet) } },
+        onMembers = { scope.launch { publish() } },
+        onPacket = { packet -> scope.launch { onRelayPacket(packet) } },
+    )
     private val _state = MutableStateFlow(buildState())
     val state: StateFlow<AppState> = _state.asStateFlow()
 
@@ -52,10 +58,20 @@ class ChatEngine(context: Context) {
             runCatching { net.start() }
                 .onFailure { DebugLog.log("network start failed", it) }
         }.start()
+        relay.start()
+        for (room in store.rooms) {
+            val code = room.code
+            if (room.via == "invite" && !code.isNullOrBlank()) {
+                scope.launch(Dispatchers.IO) {
+                    runCatching { relay.join(code) }.onFailure { DebugLog.log("rejoin $code failed", it) }
+                }
+            }
+        }
         publish()
     }
 
     fun stop() {
+        relay.stop()
         network?.stop()
         network = null
         store.save()
@@ -73,6 +89,16 @@ class ChatEngine(context: Context) {
         return room
     }
 
+    suspend fun createInvite(name: String): Room {
+        val created = withContext(Dispatchers.IO) { relay.create(cleanName(name)) }
+        return store.rooms.find { it.id == created.getString("roomId") } ?: ensureInviteRoom(created)
+    }
+
+    suspend fun joinInvite(code: String): Room {
+        val joined = withContext(Dispatchers.IO) { relay.join(code) }
+        return store.rooms.find { it.id == joined.getString("roomId") } ?: ensureInviteRoom(joined)
+    }
+
     fun joinRoom(roomId: String): Room {
         store.rooms.find { it.id == roomId }?.let { return it }
         val found = network?.peerList()?.flatMap { it.rooms }?.find { it.id == roomId }
@@ -87,6 +113,7 @@ class ChatEngine(context: Context) {
         if (roomId == Store.LOBBY.id) error("You cannot leave the Everyone room")
         val room = store.rooms.find { it.id == roomId }
         store.rooms.removeAll { it.id == roomId }
+        if (room?.via == "invite" && room.code != null) relay.leave(room.code)
         if (room?.type == "dm") store.messages.remove(roomId)
         changed(announce = true)
     }
@@ -131,6 +158,31 @@ class ChatEngine(context: Context) {
     ) {
         append(record)
         publish()
+        if (room.via == "invite") {
+            val code = room.code ?: error("This room has no invite code")
+            val envelope = JSONObject()
+                .put("id", record.id)
+                .put("from", JSONObject().put("id", record.from.id).put("name", record.from.name))
+                .put("ts", record.ts)
+                .put("text", record.text)
+                .put("room", JSONObject().put("id", room.id).put("type", "group").put("name", room.name))
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    val path = record.file?.path
+                    if (path != null) relay.sendFile(code, envelope, File(path))
+                    else relay.sendMessage(code, envelope)
+                }.onFailure { DebugLog.log("invite send failed", it) }.isSuccess
+            }
+            val others = ((relay.counts()[room.id] ?: 1) - 1).coerceAtLeast(0)
+            updateMessage(
+                record.copy(
+                    status = if (ok) "sent" else "failed",
+                    recipients = others,
+                    delivered = if (ok) others else 0,
+                ),
+            )
+            return
+        }
         val targets = targets(room)
         val envelope = JSONObject()
             .put("id", record.id)
@@ -221,7 +273,7 @@ class ChatEngine(context: Context) {
         id = store.me.id,
         name = store.me.name,
         device = deviceName(),
-        rooms = store.rooms.filter { it.type == "group" }.take(50).map {
+        rooms = store.rooms.filter { it.type == "group" && it.via != "invite" }.take(50).map {
             com.localchat.app.data.PeerRoom(it.id, it.name)
         },
     )
@@ -283,7 +335,90 @@ class ChatEngine(context: Context) {
             messages = store.messages.mapValues { it.value.toList() },
             peers = peers,
             discover = discover.values.toList(),
+            inviteMembers = relay.counts(),
         )
+    }
+
+    private fun ensureInviteRoom(packet: JSONObject): Room {
+        val id = packet.getString("roomId")
+        store.rooms.find { it.id == id }?.let { return it }
+        val room = Room(
+            id = id,
+            type = "group",
+            name = packet.optString("name").ifBlank { "Room" },
+            code = packet.optString("code"),
+            via = "invite",
+        )
+        store.rooms.add(room)
+        changed(announce = false)
+        return room
+    }
+
+    private fun onRelayPacket(packet: JSONObject) {
+        val envelope = packet.optJSONObject("envelope") ?: return
+        val from = envelope.optJSONObject("from") ?: return
+        val room = envelope.optJSONObject("room") ?: return
+        val fileObj = packet.optJSONObject("file")
+        var fileName: String? = null
+        var fileSize = 0L
+        var filePath: String? = null
+        if (fileObj != null) {
+            fileName = fileObj.optString("name").ifBlank { "file" }
+            fileSize = fileObj.optLong("size")
+            val data = fileObj.optString("data")
+            if (data.isNotBlank()) {
+                val saved = saveRelayFile(fileName, data)
+                fileName = saved.name
+                fileSize = saved.length()
+                filePath = saved.absolutePath
+            }
+        }
+        val history = packet.optBoolean("history")
+        val existing = if (history) store.rooms.find { it.id == room.optString("id") } else roomForIncoming(
+            IncomingEnvelope(
+                id = envelope.optString("id"),
+                from = Person(from.optString("id"), from.optString("name")),
+                roomId = room.optString("id"),
+                roomType = room.optString("type"),
+                roomName = room.optString("name"),
+                ts = envelope.optLong("ts"),
+                text = envelope.optString("text"),
+            ),
+        )
+        val target = existing ?: return
+        val id = envelope.optString("id")
+        if (id.isBlank() || store.messages[target.id]?.any { it.id == id } == true) return
+        val mine = from.optString("id") == store.me.id
+        val record = ChatMessage(
+            id = id,
+            roomId = target.id,
+            from = Person(from.optString("id"), from.optString("name")),
+            ts = envelope.optLong("ts", System.currentTimeMillis()),
+            text = envelope.optString("text"),
+            incoming = !mine,
+            status = if (mine) "sent" else null,
+            file = fileName?.let { FileInfo(it, fileSize, filePath) },
+        )
+        append(record)
+        publish()
+        if (!mine && !history) onIncoming?.invoke(record, target)
+    }
+
+    private fun saveRelayFile(name: String, base64: String): File {
+        downloadDir.mkdirs()
+        val safe = safeFileName(name)
+        val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
+        val base = safe.substringBeforeLast('.', safe)
+        val ext = if (safe.contains('.')) ".${safe.substringAfterLast('.')}" else ""
+        var i = 0
+        while (true) {
+            val out = File(downloadDir, if (i == 0) safe else "$base ($i)$ext")
+            if (!out.exists()) {
+                out.writeBytes(bytes)
+                return out
+            }
+            i++
+        }
     }
 
     companion object {

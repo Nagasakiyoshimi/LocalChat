@@ -7,6 +7,8 @@ data class Room(
     val type: String, // lobby | group | dm
     val name: String,
     val peerId: String? = null,
+    val code: String? = null,
+    val via: String? = null,
 )
 
 data class PeerRoom(val id: String, val name: String)
@@ -50,4 +52,5 @@ data class AppState(
     val messages: Map<String, List<ChatMessage>>,
     val peers: List<Peer>,
     val discover: List<DiscoverRoom>,
+    val inviteMembers: Map<String, Int> = emptyMap(),
 )
