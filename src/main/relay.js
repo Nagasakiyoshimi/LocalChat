@@ -313,7 +313,11 @@ function delay(ms) {
 
 async function resolveRelayUrl(fallback) {
   try {
-    const response = await fetch(RELAY_URL_SOURCE, { signal: AbortSignal.timeout(4000) });
+    const response = await fetch(`${RELAY_URL_SOURCE}?t=${Date.now()}`, {
+      cache: 'no-store',
+      headers: { 'cache-control': 'no-cache' },
+      signal: AbortSignal.timeout(4000),
+    });
     const url = (await response.text()).trim();
     if (/^wss?:\/\//i.test(url)) return url;
     debug(`invite url lookup ignored "${url.slice(0, 80)}"`);

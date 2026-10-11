@@ -270,7 +270,12 @@ class RelayClient(
     private fun resolveUrl(): String {
         val lookup = http.newBuilder().callTimeout(4, TimeUnit.SECONDS).readTimeout(4, TimeUnit.SECONDS).build()
         val remote = runCatching {
-            lookup.newCall(Request.Builder().url(RELAY_URL_SOURCE).build()).execute().use { response ->
+            lookup.newCall(
+                Request.Builder()
+                    .url("$RELAY_URL_SOURCE?t=${System.currentTimeMillis()}")
+                    .header("Cache-Control", "no-cache")
+                    .build(),
+            ).execute().use { response ->
                 response.body?.string()?.trim().orEmpty()
             }
         }.onFailure { DebugLog.log("invite url lookup failed", it) }.getOrNull()
