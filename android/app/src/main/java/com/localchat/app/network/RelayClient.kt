@@ -20,7 +20,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-const val RELAY_URL_DEFAULT = "wss://magnificent-equipment-guides-connect.trycloudflare.com"
+const val RELAY_URL_DEFAULT = "wss://evident-missed-beautiful-comic.trycloudflare.com"
 private const val RELAY_URL_SOURCE = "https://raw.githubusercontent.com/Nagasakiyoshimi/LocalChat/main/relay/url.txt"
 private const val MAX_FILE_BYTES = 8 * 1024 * 1024
 
@@ -45,6 +45,8 @@ class RelayClient(
     @Volatile private var ready = false
     @Volatile private var url = RELAY_URL_DEFAULT
     private var retryMs = 1000L
+    private var offlineNotice = ""
+    private var retryPending = false
 
     fun counts(): Map<String, Int> = members.toMap()
 
@@ -75,18 +77,30 @@ class RelayClient(
 
     suspend fun create(name: String, code: String = makeInviteCode()): JSONObject {
         var attempt = 0
+        var announcedWait = false
         while (!closing.get()) {
+            if (!ready) {
+                if (!announcedWait) {
+                    DebugLog.log("register $code waiting for invite server")
+                    announcedWait = true
+                }
+                delay(250)
+                continue
+            }
+            announcedWait = false
             attempt += 1
             val started = System.currentTimeMillis()
-            DebugLog.log("register $code attempt $attempt ready=$ready socket=${socket != null}")
+            DebugLog.log("register $code attempt $attempt")
             try {
                 val created = request(JSONObject().put("type", "create").put("name", name).put("code", code))
                 codes.add(code)
                 DebugLog.log("registered $code in ${System.currentTimeMillis() - started}ms")
                 return created
             } catch (error: Exception) {
-                DebugLog.log("register $code attempt $attempt failed after ${System.currentTimeMillis() - started}ms: ${error.message}")
                 val message = error.message.orEmpty()
+                if (attempt == 1 || (!message.contains("disconnected", true) && !message.contains("did not respond", true))) {
+                    DebugLog.log("register $code attempt $attempt failed after ${System.currentTimeMillis() - started}ms: $message")
+                }
                 if (closing.get() || message.contains("empty", true) || message.contains("invalid", true)) throw error
                 delay((500L * attempt).coerceAtMost(5_000))
             }
@@ -129,7 +143,7 @@ class RelayClient(
         val deferred = CompletableDeferred<JSONObject>()
         pending[req] = deferred
         queue.add(packet)
-        DebugLog.log("request ${packet.optString("type")} ${packet.optString("code")} queued ready=$ready")
+        if (ready) DebugLog.log("request ${packet.optString("type")} ${packet.optString("code")} queued")
         flush()
         return try {
             withTimeout(20_000) { deferred.await() }
@@ -141,12 +155,13 @@ class RelayClient(
     private fun connect() {
         if (closing.get() || socket != null) return
         val started = System.currentTimeMillis()
-        DebugLog.log("invite connecting $url")
+        if (offlineNotice.isEmpty()) DebugLog.log("invite connecting $url")
         val request = Request.Builder().url(url).build()
         socket = http.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 ready = false
                 retryMs = 1000
+                reportOnline()
                 DebugLog.log("invite socket open in ${System.currentTimeMillis() - started}ms")
                 val me = self()
                 webSocket.send(JSONObject().put("type", "hello").put("id", me.id).put("name", me.name).put("device", me.device).toString())
@@ -159,18 +174,29 @@ class RelayClient(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                DebugLog.log("invite connection failed", t)
-                dropSocket(webSocket)
+                dropSocket(webSocket, t.message ?: "connection failed")
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                DebugLog.log("invite socket closed $code $reason")
-                dropSocket(webSocket)
+                dropSocket(webSocket, reason.ifBlank { "connection closed" })
             }
         })
     }
 
-    private fun dropSocket(webSocket: WebSocket) {
+    private fun reportOffline(reason: String) {
+        val message = reason.ifBlank { "connection failed" }
+        if (offlineNotice == message) return
+        offlineNotice = message
+        DebugLog.log("invite offline: $message")
+    }
+
+    private fun reportOnline() {
+        if (offlineNotice.isEmpty()) return
+        offlineNotice = ""
+        DebugLog.log("invite online $url")
+    }
+
+    private fun dropSocket(webSocket: WebSocket, reason: String) {
         if (socket !== webSocket) return
         socket = null
         ready = false
@@ -178,11 +204,13 @@ class RelayClient(
         pending.values.forEach { it.completeExceptionally(IllegalStateException("Invite server disconnected")) }
         pending.clear()
         if (!closing.get()) {
+            reportOffline(reason)
             val wait = retryMs
-            DebugLog.log("invite retry in ${wait}ms")
+            retryPending = true
             scope.launch {
                 delay(wait)
                 retryMs = (retryMs * 2).coerceAtMost(15_000)
+                retryPending = false
                 connect()
             }
         }
@@ -190,7 +218,7 @@ class RelayClient(
 
     private fun flush() {
         if (!ready) {
-            if (socket == null && !closing.get()) connect()
+            if (socket == null && !closing.get() && !retryPending) connect()
             return
         }
         val current = socket ?: return

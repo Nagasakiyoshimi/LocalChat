@@ -30,6 +30,8 @@ export class Relay extends EventEmitter {
   #timer = null;
   #pingTimer = null;
   #connectStarted = 0;
+  #lastError = '';
+  #offlineNotice = '';
 
   constructor(self) {
     super();
@@ -111,10 +113,20 @@ export class Relay extends EventEmitter {
 
   async #register(name, code) {
     let attempt = 0;
+    let announcedWait = false;
     while (!this.#closing) {
+      if (!this.#ready) {
+        if (!announcedWait) {
+          debug(`register ${code} waiting for invite server`);
+          announcedWait = true;
+        }
+        await delay(250);
+        continue;
+      }
+      announcedWait = false;
       attempt += 1;
       const started = Date.now();
-      debug(`register ${code} attempt ${attempt} ready=${this.#ready} socket=${Boolean(this.#socket)}`);
+      debug(`register ${code} attempt ${attempt}`);
       try {
         const created = await this.#request({ type: 'create', name, code });
         this.#codes.add(code);
@@ -133,11 +145,11 @@ export class Relay extends EventEmitter {
     if (this.#closing || this.#socket) return;
     let socket;
     this.#connectStarted = Date.now();
-    debug(`invite connecting ${this.#url}`);
+    if (!this.#offlineNotice) debug(`invite connecting ${this.#url}`);
     try {
       socket = new WebSocket(this.#url);
     } catch (error) {
-      debug(`invite connect failed: ${error.message}`);
+      this.#reportOffline(error.message);
       this.#schedule();
       this.emit('warning', error);
       return;
@@ -146,6 +158,7 @@ export class Relay extends EventEmitter {
     socket.addEventListener('open', () => {
       this.#open = true;
       this.#retry = 1000;
+      this.#reportOnline();
       debug(`invite socket open in ${Date.now() - this.#connectStarted}ms`);
       const { id, name, device } = this.#self();
       this.#send({ type: 'hello', id, name, device });
@@ -165,8 +178,9 @@ export class Relay extends EventEmitter {
       }
       this.#onPacket(packet);
     });
-    socket.addEventListener('close', () => {
-      debug(`invite socket closed after ${Date.now() - this.#connectStarted}ms`);
+    socket.addEventListener('close', (event) => {
+      const reason = this.#lastError || event?.reason || 'connection failed';
+      this.#lastError = '';
       this.#socket = null;
       this.#open = false;
       this.#ready = false;
@@ -174,17 +188,35 @@ export class Relay extends EventEmitter {
       clearInterval(this.#pingTimer);
       for (const [, pending] of this.#pending) pending.reject(new Error('Invite server disconnected'));
       this.#pending.clear();
-      if (!this.#closing) this.#schedule();
+      if (!this.#closing) {
+        this.#reportOffline(String(reason));
+        this.#schedule();
+      }
     });
-    socket.addEventListener('error', () => {
-      debug('invite socket error');
+    socket.addEventListener('error', (event) => {
+      this.#lastError = event?.error?.message || event?.message || 'connection failed';
     });
+  }
+
+  #reportOffline(reason) {
+    const message = reason || 'connection failed';
+    if (this.#offlineNotice === message) return;
+    this.#offlineNotice = message;
+    debug(`invite offline: ${message}`);
+  }
+
+  #reportOnline() {
+    if (!this.#offlineNotice) return;
+    this.#offlineNotice = '';
+    debug(`invite online ${this.#url}`);
   }
 
   #schedule() {
     clearTimeout(this.#timer);
-    debug(`invite retry in ${this.#retry}ms`);
-    this.#timer = setTimeout(() => this.#connect(), this.#retry);
+    this.#timer = setTimeout(() => {
+      this.#timer = null;
+      this.#connect();
+    }, this.#retry);
     this.#retry = Math.min(this.#retry * 2, 15_000);
   }
 
@@ -196,7 +228,7 @@ export class Relay extends EventEmitter {
     const req = crypto.randomBytes(8).toString('hex');
     packet.req = req;
     const started = Date.now();
-    debug(`request ${packet.type} ${packet.code ?? ''} queued ready=${this.#ready}`);
+    if (this.#ready) debug(`request ${packet.type} ${packet.code ?? ''} queued`);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#pending.delete(req);
@@ -221,7 +253,7 @@ export class Relay extends EventEmitter {
 
   #flush() {
     if (!this.#ready) {
-      if (!this.#socket) this.#connect();
+      if (!this.#socket && !this.#timer) this.#connect();
       return;
     }
     for (const packet of this.#queue.splice(0)) {
