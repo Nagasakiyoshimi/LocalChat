@@ -51,7 +51,7 @@ export class Relay extends EventEmitter {
       debug('invite url lookup start');
       resolveRelayUrl(this.#url).then((url) => {
         debug(`invite url lookup ${Date.now() - started}ms -> ${url}`);
-        if (this.#closing || url === this.#url) return;
+        if (this.#closing || url === this.#url || this.#ready) return;
         this.#url = url;
         debug('invite switching url');
         this.#retry = 0;
@@ -315,7 +315,7 @@ async function resolveRelayUrl(fallback) {
   try {
     const response = await fetch(`${RELAY_URL_SOURCE}?t=${Date.now()}`, {
       cache: 'no-store',
-      headers: { 'cache-control': 'no-cache' },
+      headers: { 'accept-encoding': 'identity', 'cache-control': 'no-cache' },
       signal: AbortSignal.timeout(4000),
     });
     const url = (await response.text()).trim();

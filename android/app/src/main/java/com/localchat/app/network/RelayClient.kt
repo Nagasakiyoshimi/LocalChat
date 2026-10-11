@@ -59,7 +59,7 @@ class RelayClient(
             DebugLog.log("invite url lookup start")
             val remote = resolveUrl()
             DebugLog.log("invite url lookup ${System.currentTimeMillis() - started}ms -> $remote")
-            if (remote != url && remote.startsWith("ws") && !closing.get()) {
+            if (remote != url && remote.startsWith("ws") && !closing.get() && !ready) {
                 url = remote
                 DebugLog.log("invite switching url")
                 retryMs = 0
@@ -273,6 +273,7 @@ class RelayClient(
             lookup.newCall(
                 Request.Builder()
                     .url("$RELAY_URL_SOURCE?t=${System.currentTimeMillis()}")
+                    .header("Accept-Encoding", "identity")
                     .header("Cache-Control", "no-cache")
                     .build(),
             ).execute().use { response ->
