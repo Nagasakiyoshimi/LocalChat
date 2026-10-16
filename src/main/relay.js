@@ -32,6 +32,8 @@ export class Relay extends EventEmitter {
   #connectStarted = 0;
   #lastError = '';
   #offlineNotice = '';
+  #lastLookup = 0;
+  #refreshing = false;
 
   constructor(self) {
     super();
@@ -46,18 +48,7 @@ export class Relay extends EventEmitter {
     this.#closing = false;
     debug(`invite start ${this.#url}`);
     this.#connect();
-    if (!process.env.LOCALCHAT_RELAY) {
-      const started = Date.now();
-      debug('invite url lookup start');
-      resolveRelayUrl(this.#url).then((url) => {
-        debug(`invite url lookup ${Date.now() - started}ms -> ${url}`);
-        if (this.#closing || url === this.#url || this.#ready) return;
-        this.#url = url;
-        debug('invite switching url');
-        this.#retry = 0;
-        this.#socket?.close();
-      });
-    }
+    this.#refreshUrl(true);
   }
 
   stop() {
@@ -79,11 +70,24 @@ export class Relay extends EventEmitter {
     return this.#register(name, normalized);
   }
 
-  join(code) {
+  async join(code) {
     const normalized = normalizeInviteCode(code);
     this.#codes.add(normalized);
     debug(`invite join ${normalized}`);
-    return this.#request({ type: 'join', code: normalized });
+    if (!this.#ready) this.#kickReconnect();
+    const deadline = Date.now() + 12_000;
+    while (!this.#closing && Date.now() < deadline) {
+      if (this.#ready) {
+        try {
+          return await this.#request({ type: 'join', code: normalized });
+        } catch (error) {
+          if (/not found|enter the invite code/i.test(error.message)) throw error;
+          if (this.#closing) throw error;
+        }
+      }
+      await delay(200);
+    }
+    throw new Error("Can't reach the invite server right now. Try again in a moment.");
   }
 
   leave(code) {
@@ -213,11 +217,48 @@ export class Relay extends EventEmitter {
 
   #schedule() {
     clearTimeout(this.#timer);
+    this.#refreshUrl(false);
     this.#timer = setTimeout(() => {
       this.#timer = null;
       this.#connect();
     }, this.#retry);
     this.#retry = Math.min(this.#retry * 2, 15_000);
+  }
+
+  #kickReconnect() {
+    this.#refreshUrl(true);
+    if (this.#socket) return;
+    clearTimeout(this.#timer);
+    this.#timer = null;
+    this.#connect();
+  }
+
+  #refreshUrl(force) {
+    if (process.env.LOCALCHAT_RELAY || this.#closing || this.#refreshing) return;
+    if (!force && Date.now() - this.#lastLookup < 20_000) return;
+    this.#lastLookup = Date.now();
+    this.#refreshing = true;
+    const started = Date.now();
+    resolveRelayUrl(this.#url)
+      .then((url) => {
+        if (url !== this.#url) debug(`invite url lookup ${Date.now() - started}ms -> ${url}`);
+        this.#applyUrl(url);
+      })
+      .finally(() => {
+        this.#refreshing = false;
+      });
+  }
+
+  #applyUrl(url) {
+    if (this.#closing || !url || url === this.#url || this.#ready || this.#socket) return;
+    this.#url = url;
+    this.#offlineNotice = '';
+    debug(`invite switching to ${url}`);
+    this.#retry = 0;
+    clearTimeout(this.#timer);
+    this.#timer = null;
+    if (this.#socket) this.#socket.close();
+    else this.#connect();
   }
 
   #send(packet) {

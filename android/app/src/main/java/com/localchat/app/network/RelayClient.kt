@@ -20,7 +20,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-const val RELAY_URL_DEFAULT = "wss://evident-missed-beautiful-comic.trycloudflare.com"
+const val RELAY_URL_DEFAULT = "wss://birds-black-northeast-amounts.trycloudflare.com"
 private const val RELAY_URL_SOURCE = "https://raw.githubusercontent.com/Nagasakiyoshimi/LocalChat/main/relay/url.txt"
 private const val MAX_FILE_BYTES = 8 * 1024 * 1024
 
@@ -47,6 +47,8 @@ class RelayClient(
     private var retryMs = 1000L
     private var offlineNotice = ""
     private var retryPending = false
+    private var refreshing = false
+    private var lastLookup = 0L
 
     fun counts(): Map<String, Int> = members.toMap()
 
@@ -54,18 +56,7 @@ class RelayClient(
         closing.set(false)
         DebugLog.log("invite connect now $url")
         connect()
-        scope.launch {
-            val started = System.currentTimeMillis()
-            DebugLog.log("invite url lookup start")
-            val remote = resolveUrl()
-            DebugLog.log("invite url lookup ${System.currentTimeMillis() - started}ms -> $remote")
-            if (remote != url && remote.startsWith("ws") && !closing.get() && !ready) {
-                url = remote
-                DebugLog.log("invite switching url")
-                retryMs = 0
-                socket?.close(1000, "url")
-            }
-        }
+        refreshUrl(force = true)
     }
 
     fun stop() {
@@ -112,7 +103,21 @@ class RelayClient(
         val normalized = normalizeCode(code)
         codes.add(normalized)
         DebugLog.log("invite join $normalized")
-        return request(JSONObject().put("type", "join").put("code", normalized))
+        if (!ready) kickReconnect()
+        val deadline = System.currentTimeMillis() + 12_000
+        while (!closing.get() && System.currentTimeMillis() < deadline) {
+            if (ready) {
+                try {
+                    return request(JSONObject().put("type", "join").put("code", normalized))
+                } catch (error: Exception) {
+                    val message = error.message.orEmpty()
+                    if (message.contains("not found", true) || message.contains("enter the invite code", true)) throw error
+                    if (closing.get()) throw error
+                }
+            }
+            delay(200)
+        }
+        error("Can't reach the invite server right now. Try again in a moment.")
     }
 
     fun leave(code: String) {
@@ -207,6 +212,7 @@ class RelayClient(
             reportOffline(reason)
             val wait = retryMs
             retryPending = true
+            refreshUrl(force = false)
             scope.launch {
                 delay(wait)
                 retryMs = (retryMs * 2).coerceAtMost(15_000)
@@ -265,6 +271,40 @@ class RelayClient(
                 onMembers()
             }
         }
+    }
+
+    private fun kickReconnect() {
+        refreshUrl(force = true)
+        if (socket != null) return
+        retryPending = false
+        retryMs = 1000
+        connect()
+    }
+
+    private fun refreshUrl(force: Boolean) {
+        if (closing.get() || refreshing) return
+        if (!force && System.currentTimeMillis() - lastLookup < 20_000) return
+        lastLookup = System.currentTimeMillis()
+        refreshing = true
+        scope.launch {
+            val started = System.currentTimeMillis()
+            val remote = resolveUrl()
+            refreshing = false
+            if (remote != url) DebugLog.log("invite url lookup ${System.currentTimeMillis() - started}ms -> $remote")
+            applyUrl(remote)
+        }
+    }
+
+    private fun applyUrl(remote: String) {
+        if (closing.get() || !remote.startsWith("ws") || remote == url || ready || socket != null) return
+        url = remote
+        offlineNotice = ""
+        DebugLog.log("invite switching to $url")
+        retryMs = 0
+        retryPending = false
+        val current = socket
+        if (current != null) current.close(1000, "url")
+        else connect()
     }
 
     private fun resolveUrl(): String {
