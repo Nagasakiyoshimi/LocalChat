@@ -20,7 +20,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-const val RELAY_URL_DEFAULT = "wss://birds-black-northeast-amounts.trycloudflare.com"
+const val RELAY_URL_DEFAULT = "wss://multimedia-concerned-nicholas-stomach.trycloudflare.com"
 private const val RELAY_URL_SOURCE = "https://raw.githubusercontent.com/Nagasakiyoshimi/LocalChat/main/relay/url.txt"
 private const val MAX_FILE_BYTES = 8 * 1024 * 1024
 
@@ -69,7 +69,9 @@ class RelayClient(
     suspend fun create(name: String, code: String = makeInviteCode()): JSONObject {
         var attempt = 0
         var announcedWait = false
-        while (!closing.get()) {
+        val deadline = System.currentTimeMillis() + 15_000
+        if (!ready) kickReconnect()
+        while (!closing.get() && System.currentTimeMillis() < deadline) {
             if (!ready) {
                 if (!announcedWait) {
                     DebugLog.log("register $code waiting for invite server")
@@ -96,7 +98,7 @@ class RelayClient(
                 delay((500L * attempt).coerceAtMost(5_000))
             }
         }
-        error("Invite server stopped")
+        error("Can't reach the invite server right now. Try again in a moment.")
     }
 
     suspend fun join(code: String): JSONObject {
@@ -296,7 +298,7 @@ class RelayClient(
     }
 
     private fun applyUrl(remote: String) {
-        if (closing.get() || !remote.startsWith("ws") || remote == url || ready || socket != null) return
+        if (closing.get() || !remote.startsWith("ws") || remote == url || ready) return
         url = remote
         offlineNotice = ""
         DebugLog.log("invite switching to $url")

@@ -93,35 +93,13 @@ class ChatEngine(context: Context) {
         return room
     }
 
-    fun createInvite(name: String): Room {
+    suspend fun createInvite(name: String): Room {
         val clean = cleanName(name)
         val code = makeInviteCode()
-        val room = Room(
-            id = "invite:$code",
-            type = "group",
-            name = clean,
-            code = code,
-            via = "invite",
-            inviteState = "pending",
-        )
-        store.rooms.add(room)
-        changed(announce = false)
-        DebugLog.log("create room \"$clean\" $code shown locally")
-        scope.launch(Dispatchers.IO) {
-            runCatching { relay.create(clean, code) }
-                .onSuccess { DebugLog.log("create room $code confirmed by server") }
-                .onFailure { error ->
-                    DebugLog.log("create room $code failed", error)
-                    withContext(Dispatchers.Main) {
-                        val idx = store.rooms.indexOfFirst { it.id == room.id }
-                        if (idx >= 0 && store.rooms[idx].inviteState != "ready") {
-                            store.rooms[idx] = store.rooms[idx].copy(inviteState = "failed")
-                            changed(announce = false)
-                        }
-                    }
-                }
-        }
-        return room
+        DebugLog.log("create room \"$clean\" $code requested")
+        val created = withContext(Dispatchers.IO) { relay.create(clean, code) }
+        DebugLog.log("create room $code confirmed by server")
+        return store.rooms.find { it.id == created.getString("roomId") } ?: ensureInviteRoom(created)
     }
 
     suspend fun joinInvite(code: String): Room {

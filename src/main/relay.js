@@ -250,7 +250,7 @@ export class Relay extends EventEmitter {
   }
 
   #applyUrl(url) {
-    if (this.#closing || !url || url === this.#url || this.#ready || this.#socket) return;
+    if (this.#closing || !url || url === this.#url || this.#ready) return;
     this.#url = url;
     this.#offlineNotice = '';
     debug(`invite switching to ${url}`);

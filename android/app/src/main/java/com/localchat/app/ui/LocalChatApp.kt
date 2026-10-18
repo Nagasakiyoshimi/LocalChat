@@ -786,11 +786,13 @@ private fun MessageBubble(message: ChatMessage, mine: Boolean, onOpenFile: (Stri
                     color = if (mine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
                     border = if (mine) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                 ) {
-                    Text(
-                        message.text,
-                        Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        color = if (mine) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                    )
+                    SelectionContainer {
+                        Text(
+                            message.text,
+                            Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            color = if (mine) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
                 }
             }
             if (mine && message.status != null) {
