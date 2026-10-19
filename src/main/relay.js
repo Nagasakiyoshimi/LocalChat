@@ -48,7 +48,6 @@ export class Relay extends EventEmitter {
     this.#closing = false;
     debug(`invite start ${this.#url}`);
     this.#connect();
-    this.#refreshUrl(true);
   }
 
   stop() {
@@ -226,8 +225,8 @@ export class Relay extends EventEmitter {
   }
 
   #kickReconnect() {
-    this.#refreshUrl(true);
     if (this.#socket) return;
+    this.#refreshUrl(true);
     clearTimeout(this.#timer);
     this.#timer = null;
     this.#connect();
@@ -354,9 +353,14 @@ function delay(ms) {
 
 async function resolveRelayUrl(fallback) {
   try {
-    const response = await fetch(`${RELAY_URL_SOURCE}?t=${Date.now()}`, {
+    const separator = RELAY_URL_SOURCE.includes('?') ? '&' : '?';
+    const response = await fetch(`${RELAY_URL_SOURCE}${separator}t=${Date.now()}`, {
       cache: 'no-store',
-      headers: { 'accept-encoding': 'identity', 'cache-control': 'no-cache' },
+      headers: {
+        accept: 'application/vnd.github.raw+json',
+        'cache-control': 'no-cache',
+        'user-agent': 'LocalChat',
+      },
       signal: AbortSignal.timeout(4000),
     });
     const url = (await response.text()).trim();

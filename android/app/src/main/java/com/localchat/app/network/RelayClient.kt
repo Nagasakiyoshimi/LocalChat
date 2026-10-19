@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 const val RELAY_URL_DEFAULT = "wss://herself-rich-bringing-years.trycloudflare.com"
-private const val RELAY_URL_SOURCE = "https://raw.githubusercontent.com/Nagasakiyoshimi/LocalChat/main/relay/url.txt"
+private const val RELAY_URL_SOURCE = "https://api.github.com/repos/Nagasakiyoshimi/LocalChat/contents/relay/url.txt?ref=main"
 private const val MAX_FILE_BYTES = 8 * 1024 * 1024
 
 class RelayClient(
@@ -56,7 +56,6 @@ class RelayClient(
         closing.set(false)
         DebugLog.log("invite connect now $url")
         connect()
-        refreshUrl(force = true)
     }
 
     fun stop() {
@@ -276,8 +275,8 @@ class RelayClient(
     }
 
     private fun kickReconnect() {
-        refreshUrl(force = true)
         if (socket != null) return
+        refreshUrl(force = true)
         retryPending = false
         retryMs = 1000
         connect()
@@ -314,9 +313,10 @@ class RelayClient(
         val remote = runCatching {
             lookup.newCall(
                 Request.Builder()
-                    .url("$RELAY_URL_SOURCE?t=${System.currentTimeMillis()}")
-                    .header("Accept-Encoding", "identity")
+                    .url("$RELAY_URL_SOURCE&t=${System.currentTimeMillis()}")
+                    .header("Accept", "application/vnd.github.raw+json")
                     .header("Cache-Control", "no-cache")
+                    .header("User-Agent", "LocalChat")
                     .build(),
             ).execute().use { response ->
                 response.body?.string()?.trim().orEmpty()
