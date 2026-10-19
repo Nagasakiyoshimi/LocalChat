@@ -33,8 +33,10 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
@@ -91,6 +93,8 @@ fun LocalChatApp(
     onShareLog: (String) -> Unit,
     updateVersion: String? = null,
     updateBusy: Boolean = false,
+    updateChecking: Boolean = false,
+    onCheckUpdate: () -> Unit = {},
     onInstallUpdate: () -> Unit = {},
 ) {
     val state by chat.state.collectAsState()
@@ -100,6 +104,7 @@ fun LocalChatApp(
     var error by remember { mutableStateOf<String?>(null) }
     var prompt by remember { mutableStateOf<PromptKind?>(null) }
     var showDebug by remember { mutableStateOf(false) }
+    var pendingDelete by remember { mutableStateOf<Room?>(null) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(currentRoomId) {
@@ -124,6 +129,24 @@ fun LocalChatApp(
             confirmButton = { TextButton(onClick = { error = null }) { Text("OK") } },
             title = { Text("Something went wrong") },
             text = { Text(error ?: "") },
+        )
+    }
+
+    pendingDelete?.let { deleting ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        chat.deleteRoom(deleting.id)
+                        if (currentRoomId == deleting.id) currentRoomId = "lobby"
+                        pendingDelete = null
+                    },
+                ) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Cancel") } },
+            title = { Text("Delete ${deleting.name}?") },
+            text = { Text("This removes the room and its saved messages from this device.") },
         )
     }
 
@@ -234,6 +257,9 @@ fun LocalChatApp(
                 }
             },
             onOpenDebug = { showDebug = true },
+            onDeleteRoom = { pendingDelete = it },
+            onCheckUpdate = onCheckUpdate,
+            updateChecking = updateChecking,
         )
     }
     }
@@ -310,6 +336,9 @@ private fun HomeScreen(
     onJoinRoom: (String) -> Unit,
     onOpenDirect: (String) -> Unit,
     onOpenDebug: () -> Unit,
+    onDeleteRoom: (Room) -> Unit,
+    onCheckUpdate: () -> Unit,
+    updateChecking: Boolean,
 ) {
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surfaceVariant) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
@@ -348,6 +377,7 @@ private fun HomeScreen(
                         selected = room.id == currentRoomId,
                         badge = unread[room.id] ?: 0,
                         onClick = { onSelectRoom(room.id) },
+                        onDelete = if (room.type == "lobby") null else { { onDeleteRoom(room) } },
                     )
                 }
 
@@ -385,6 +415,7 @@ private fun HomeScreen(
                             selected = room.id == currentRoomId,
                             badge = unread[room.id] ?: 0,
                             onClick = { onSelectRoom(room.id) },
+                            onDelete = { onDeleteRoom(room) },
                         )
                     }
                 }
@@ -415,11 +446,20 @@ private fun HomeScreen(
                 }
             }
 
-            TextButton(
-                onClick = onOpenDebug,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text("Debug log")
+                TextButton(onClick = onOpenDebug) {
+                    Text("Debug log")
+                }
+                TextButton(onClick = onCheckUpdate, enabled = !updateChecking) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(if (updateChecking) "Checking…" else "Check for updates")
+                }
             }
         }
     }
@@ -503,6 +543,7 @@ private fun RoomRow(
     avatarName: String? = null,
     avatarId: String? = null,
     online: Boolean? = null,
+    onDelete: (() -> Unit)? = null,
 ) {
     val bg = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent
     Row(
@@ -528,6 +569,11 @@ private fun RoomRow(
         }
         if (badge > 0) {
             Badge { Text(if (badge > 99) "99+" else badge.toString()) }
+        }
+        if (onDelete != null) {
+            IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Default.Delete, contentDescription = "Delete room", Modifier.size(18.dp))
+            }
         }
     }
 }

@@ -56,6 +56,7 @@ fun downloadUpdate(update: AppUpdate, dest: File, client: OkHttpClient = default
 }
 
 private fun defaultClient() = OkHttpClient.Builder()
+    .callTimeout(20, TimeUnit.SECONDS)
     .connectTimeout(20, TimeUnit.SECONDS)
     .readTimeout(5, TimeUnit.MINUTES)
     .followRedirects(true)

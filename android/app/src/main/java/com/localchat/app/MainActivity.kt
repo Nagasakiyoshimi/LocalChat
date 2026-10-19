@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -65,13 +66,31 @@ class MainActivity : ComponentActivity() {
 
         val updateVersion = androidx.compose.runtime.mutableStateOf<String?>(null)
         val updateBusy = androidx.compose.runtime.mutableStateOf(false)
-        lifecycleScope.launch {
-            val update = withContext(Dispatchers.IO) {
-                runCatching { findUpdate(BuildConfig.VERSION_NAME) }.getOrNull()
+        val updateChecking = androidx.compose.runtime.mutableStateOf(false)
+
+        fun checkForUpdate(manual: Boolean) {
+            if (updateChecking.value) return
+            updateChecking.value = true
+            lifecycleScope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    runCatching { findUpdate(BuildConfig.VERSION_NAME) }
+                }
+                updateChecking.value = false
+                result.onSuccess { update ->
+                    pendingUpdate = update
+                    updateVersion.value = update?.version
+                    if (manual && update == null) {
+                        Toast.makeText(this@MainActivity, "LocalChat is up to date", Toast.LENGTH_SHORT).show()
+                    }
+                }.onFailure { error ->
+                    DebugLog.log("update check failed", error)
+                    if (manual) {
+                        Toast.makeText(this@MainActivity, "Could not check for updates", Toast.LENGTH_SHORT).show()
+                    }
+                }
             }
-            pendingUpdate = update
-            updateVersion.value = update?.version
         }
+        checkForUpdate(manual = false)
 
         setContent {
             val version = updateVersion.value
@@ -88,6 +107,8 @@ class MainActivity : ComponentActivity() {
                     onShareLog = { text -> shareLog(text) },
                     updateVersion = version,
                     updateBusy = busy,
+                    updateChecking = updateChecking.value,
+                    onCheckUpdate = { checkForUpdate(manual = true) },
                     onInstallUpdate = {
                         val update = pendingUpdate ?: return@LocalChatApp
                         updateBusy.value = true

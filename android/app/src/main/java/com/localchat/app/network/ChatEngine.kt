@@ -93,13 +93,38 @@ class ChatEngine(context: Context) {
         return room
     }
 
-    suspend fun createInvite(name: String): Room {
+    fun createInvite(name: String): Room {
         val clean = cleanName(name)
         val code = makeInviteCode()
-        DebugLog.log("create room \"$clean\" $code requested")
-        val created = withContext(Dispatchers.IO) { relay.create(clean, code) }
-        DebugLog.log("create room $code confirmed by server")
-        return store.rooms.find { it.id == created.getString("roomId") } ?: ensureInviteRoom(created)
+        val room = Room(
+            id = "invite:$code",
+            type = "group",
+            name = clean,
+            code = code,
+            via = "invite",
+            inviteState = "pending",
+        )
+        store.rooms.add(room)
+        changed(announce = false)
+        DebugLog.log("create room \"$clean\" $code shown locally")
+        scope.launch(Dispatchers.IO) {
+            runCatching { relay.create(clean, code) }
+                .onSuccess {
+                    DebugLog.log("create room $code confirmed by server")
+                    withContext(Dispatchers.Main) { markInviteReady(room.id) }
+                }
+                .onFailure { error ->
+                    DebugLog.log("create room $code failed", error)
+                    withContext(Dispatchers.Main) {
+                        val idx = store.rooms.indexOfFirst { it.id == room.id }
+                        if (idx >= 0 && store.rooms[idx].inviteState != "ready") {
+                            store.rooms[idx] = store.rooms[idx].copy(inviteState = "failed")
+                            changed(announce = false)
+                        }
+                    }
+                }
+        }
+        return room
     }
 
     suspend fun joinInvite(code: String): Room {
@@ -123,6 +148,15 @@ class ChatEngine(context: Context) {
         store.rooms.removeAll { it.id == roomId }
         if (room?.via == "invite" && room.code != null) relay.leave(room.code)
         if (room?.type == "dm") store.messages.remove(roomId)
+        changed(announce = true)
+    }
+
+    fun deleteRoom(roomId: String) {
+        if (roomId == Store.LOBBY.id) error("You cannot delete the Everyone room")
+        val room = store.rooms.find { it.id == roomId }
+        store.rooms.removeAll { it.id == roomId }
+        store.messages.remove(roomId)
+        if (room?.via == "invite" && room.code != null) relay.leave(room.code)
         changed(announce = true)
     }
 

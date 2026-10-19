@@ -1,4 +1,4 @@
-export const RELAY_URL = process.env.LOCALCHAT_RELAY || 'wss://multimedia-concerned-nicholas-stomach.trycloudflare.com';
+export const RELAY_URL = process.env.LOCALCHAT_RELAY || 'wss://herself-rich-bringing-years.trycloudflare.com';
 export const RELAY_URL_SOURCE = 'https://raw.githubusercontent.com/Nagasakiyoshimi/LocalChat/main/relay/url.txt';
 
 export function normalizeInviteCode(input) {

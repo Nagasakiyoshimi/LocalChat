@@ -1,7 +1,7 @@
 {
   "name": "localchat",
   "productName": "LocalChat",
-  "version": "1.2.7",
+  "version": "1.2.8",
   "description": "Serverless LAN chat rooms and file sharing, like LocalSend with chat.",
   "author": "Nagasakiyoshimi",
   "type": "module",
