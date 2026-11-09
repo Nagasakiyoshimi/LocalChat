@@ -20,7 +20,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-const val RELAY_URL_DEFAULT = "wss://herself-rich-bringing-years.trycloudflare.com"
+const val RELAY_URL_DEFAULT = "wss://standards-sensor-significant-complement.trycloudflare.com"
 private const val RELAY_URL_SOURCE = "https://api.github.com/repos/Nagasakiyoshimi/LocalChat/contents/relay/url.txt?ref=main"
 private const val MAX_FILE_BYTES = 8 * 1024 * 1024
 

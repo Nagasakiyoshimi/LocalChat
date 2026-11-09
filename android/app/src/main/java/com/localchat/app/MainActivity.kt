@@ -33,6 +33,7 @@ class MainActivity : ComponentActivity() {
     private var currentRoomId = "lobby"
     private var pendingPickRoom: String? = null
     private var pendingUpdate: AppUpdate? = null
+    private var pendingInstall: File? = null
 
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -133,6 +134,13 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         focused = true
+        val file = pendingInstall
+        if (file != null && file.exists() &&
+            (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls())
+        ) {
+            pendingInstall = null
+            installApk(file)
+        }
     }
 
     override fun onPause() {
@@ -201,15 +209,25 @@ class MainActivity : ComponentActivity() {
 
     private fun installApk(file: File) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+            pendingInstall = file
+            Toast.makeText(this, "Allow LocalChat to install updates, then return here", Toast.LENGTH_LONG).show()
             startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
             return
         }
         val uri = FileProvider.getUriForFile(this, "$packageName.files", file)
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, "application/vnd.android.package-archive")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         runCatching { startActivity(intent) }
+            .onFailure {
+                DebugLog.log("install update failed", it)
+                Toast.makeText(
+                    this,
+                    "Install blocked. Uninstall LocalChat once, then install this update.",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
     }
 
     private fun openFile(path: String) {
